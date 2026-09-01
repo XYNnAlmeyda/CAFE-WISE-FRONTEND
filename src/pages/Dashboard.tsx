@@ -104,10 +104,10 @@ const Dashboard = () => {
             const totalDiscount = activeSalesList.reduce((sum: number, s: any) => sum + Number(s.discount || 0), 0);
 
             const kpis = [
-                { label: 'Gross Revenue', value: `₱${Number(stats.revenue).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: `Cash: ₱${totalCash.toLocaleString()} | E-Wallet: ₱${totalEwallet.toLocaleString()}`, color: GREEN },
-                { label: 'Weekly Demand', value: `${stats.demand} units`, sub: 'Forecasted sales demand', color: ACCENT2 },
+                { label: 'Gross Revenue', value: `₱${Number(stats.revenue || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: `Cash: ₱${totalCash.toLocaleString()} | E-Wallet: ₱${totalEwallet.toLocaleString()}`, color: GREEN },
+                { label: 'Weekly Demand', value: `${stats.demand || 0} units`, sub: 'Forecasted sales demand', color: ACCENT2 },
                 { label: 'Senior/PWD Discounts', value: `₱${totalDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, sub: 'Applied customer discounts', color: YELLOW },
-                { label: 'Waste & Loss', value: `₱${Number(stats.waste).toFixed(2)}`, sub: 'Logged ingredient waste', color: RED }
+                { label: 'Waste & Loss', value: `₱${Number(stats.waste || 0).toFixed(2)}`, sub: 'Logged ingredient waste', color: RED }
             ];
 
             kpis.forEach((k, i) => {
@@ -426,9 +426,9 @@ const Dashboard = () => {
                 <div className="col-span-3">
                     <StatCard
                         title="Total Revenue"
-                        value={loading ? "..." : `₱${stats.revenue.toLocaleString()}`}
-                        trend={stats.revenue_change !== null ? `${Math.abs(stats.revenue_change)}%` : undefined}
-                        isPositive={stats.revenue_change !== null ? stats.revenue_change >= 0 : true}
+                        value={loading ? "..." : `₱${Number(stats.revenue || 0).toLocaleString()}`}
+                        trend={stats.revenue_change !== null && stats.revenue_change !== undefined ? `${Math.abs(stats.revenue_change)}%` : undefined}
+                        isPositive={stats.revenue_change !== null && stats.revenue_change !== undefined ? stats.revenue_change >= 0 : true}
                         icon={<PhilippinePeso size={20} />}
                         delay={0.1}
                     />
@@ -436,9 +436,9 @@ const Dashboard = () => {
                 <div className="col-span-3">
                     <StatCard
                         title="Forecasted Demand"
-                        value={loading ? "..." : `${stats.demand.toLocaleString()} units`}
-                        trend={stats.demand_change !== null ? `${Math.abs(stats.demand_change)}%` : undefined}
-                        isPositive={stats.demand_change !== null ? stats.demand_change >= 0 : true}
+                        value={loading ? "..." : `${Number(stats.demand || 0).toLocaleString()} units`}
+                        trend={stats.demand_change !== null && stats.demand_change !== undefined ? `${Math.abs(stats.demand_change)}%` : undefined}
+                        isPositive={stats.demand_change !== null && stats.demand_change !== undefined ? stats.demand_change >= 0 : true}
                         icon={<Activity size={20} />}
                         delay={0.2}
                     />
@@ -446,9 +446,9 @@ const Dashboard = () => {
                 <div className="col-span-3">
                     <StatCard
                         title="Items Expiring SOON"
-                        value={loading ? "..." : `${stats.expiring} batches`}
-                        trend={stats.expiring_change !== null ? `${Math.abs(stats.expiring_change)}%` : undefined}
-                        isPositive={stats.expiring_change !== null ? stats.expiring_change <= 0 : false}
+                        value={loading ? "..." : `${stats.expiring || 0} batches`}
+                        trend={stats.expiring_change !== null && stats.expiring_change !== undefined ? `${Math.abs(stats.expiring_change)}%` : undefined}
+                        isPositive={stats.expiring_change !== null && stats.expiring_change !== undefined ? stats.expiring_change <= 0 : false}
                         icon={<AlertCircle size={20} />}
                         delay={0.3}
                     />
@@ -456,9 +456,9 @@ const Dashboard = () => {
                 <div className="col-span-3">
                     <StatCard
                         title="Waste Logged"
-                        value={loading ? "..." : `₱${stats.waste.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                        trend={stats.waste_change !== null ? `${Math.abs(stats.waste_change)}%` : undefined}
-                        isPositive={stats.waste_change !== null ? stats.waste_change <= 0 : false}
+                        value={loading ? "..." : `₱${Number(stats.waste || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                        trend={stats.waste_change !== null && stats.waste_change !== undefined ? `${Math.abs(stats.waste_change)}%` : undefined}
+                        isPositive={stats.waste_change !== null && stats.waste_change !== undefined ? stats.waste_change <= 0 : false}
                         icon={<PackageSearch size={20} />}
                         delay={0.4}
                     />
