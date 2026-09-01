@@ -3,8 +3,8 @@
  * Dynamically uses the same host as the frontend so LAN/network access works.
  * Override with VITE_API_BASE_URL env variable for production deployments.
  */
-const defaultBase = `${window.location.protocol}//${window.location.hostname}:8000`;
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || defaultBase;
+const rawBase = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8000`;
+export const API_BASE_URL = rawBase.replace(/\/+$/, '');
 
 export const API_ENDPOINTS = {
     STATS: `${API_BASE_URL}/api/dashboard/stats`,
