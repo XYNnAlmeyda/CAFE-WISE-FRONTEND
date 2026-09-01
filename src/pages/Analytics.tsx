@@ -22,7 +22,7 @@ const Analytics = () => {
         try {
             // 1. Sales by Category
             const saleItems = await apiClient.get(API_ENDPOINTS.ANALYTICS.CATEGORY);
-            if (saleItems) {
+            if (Array.isArray(saleItems)) {
                 const categoryMap: Record<string, number> = {};
                 saleItems.forEach((item: any) => {
                     const category = item.products?.category || 'Uncategorized';
@@ -39,7 +39,7 @@ const Analytics = () => {
 
             // 2. Weekly Waste Log
             const wasteLogs = await apiClient.get(API_ENDPOINTS.ANALYTICS.WASTE_WEEKLY);
-            if (wasteLogs) {
+            if (Array.isArray(wasteLogs)) {
                 const weekData = DAYS.map(day => ({ name: day, amount: 0 }));
                 wasteLogs.forEach((log: any) => {
                     const date = new Date(log.logged_date);

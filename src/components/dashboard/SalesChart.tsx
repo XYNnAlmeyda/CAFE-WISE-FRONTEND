@@ -24,7 +24,9 @@ const SalesChart = () => {
     const fetchChartData = async () => {
         try {
             setLoading(true);
-            const { actual, forecast } = await apiClient.get(API_ENDPOINTS.ANALYTICS.SARIMAX);
+            const response = await apiClient.get(API_ENDPOINTS.ANALYTICS.SARIMAX);
+            const actual = Array.isArray(response?.actual) ? response.actual : [];
+            const forecast = Array.isArray(response?.forecast) ? response.forecast : [];
 
             // Merge actual and forecast into a unified timeline
             const dateMap: Record<string, { name: string; actual?: number; forecast?: number }> = {};
