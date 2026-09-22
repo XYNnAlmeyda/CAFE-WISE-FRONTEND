@@ -112,19 +112,15 @@ const ResetPassword: React.FC = () => {
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     required
-                                    style={{ paddingRight: '3rem' }}
+                                    style={{ paddingRight: '2.5rem' }}
                                 />
                                 <button
                                     type="button"
+                                    className="password-toggle-btn"
                                     onClick={() => setShowPassword(v => !v)}
-                                    style={{
-                                        position: 'absolute', right: '0.75rem',
-                                        background: 'none', border: 'none',
-                                        color: 'var(--text-muted)', cursor: 'pointer',
-                                        display: 'flex', alignItems: 'center'
-                                    }}
+                                    aria-label={showPassword ? 'Hide password' : 'Show password'}
                                 >
-                                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                                 </button>
                             </div>
                         </div>
@@ -140,7 +136,16 @@ const ResetPassword: React.FC = () => {
                                     value={confirmPassword}
                                     onChange={(e) => setConfirmPassword(e.target.value)}
                                     required
+                                    style={{ paddingRight: '2.5rem' }}
                                 />
+                                <button
+                                    type="button"
+                                    className="password-toggle-btn"
+                                    onClick={() => setShowPassword(v => !v)}
+                                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                                >
+                                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                </button>
                             </div>
                         </div>
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Plus, Trash2, X, BookOpen, ChevronDown, Package, AlertTriangle, Clock, PlusCircle, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, X, BookOpen, ChevronDown, Package, AlertTriangle, Clock, PlusCircle, RefreshCw, Layers, Pencil, Calculator } from 'lucide-react';
 import { API_ENDPOINTS } from '../lib/api';
 import { apiClient } from '../lib/apiClient';
 
@@ -8,12 +8,15 @@ import { apiClient } from '../lib/apiClient';
 interface Ingredient {
     id: string;
     name: string;
+    category?: string;
     unit: string;
     stock_quantity: number;
     min_stock_level: number;
     cost_per_unit: number;
     expiry_date?: string;
     batch_number?: string;
+    received_date?: string;
+    parent_id?: string;
 }
 
 interface RecipeRow {
@@ -35,10 +38,10 @@ interface Product {
 const inputStyle: React.CSSProperties = {
     width: '100%',
     padding: '0.65rem 0.85rem',
-    background: 'rgba(0,0,0,0.25)',
-    border: '1px solid var(--glass-border)',
+    background: 'rgba(0, 0, 0, 0.04)',
+    border: '1.5px solid var(--glass-border)',
     borderRadius: 'var(--border-radius-md)',
-    color: 'white',
+    color: 'var(--text-primary)',
     outline: 'none',
     fontSize: '0.9rem',
     boxSizing: 'border-box',
@@ -51,12 +54,32 @@ const labelStyle: React.CSSProperties = {
     color: 'var(--text-secondary)',
 };
 
+import { getEffectiveUnitCost } from '../lib/utils';
+export { getEffectiveUnitCost };
+
 // ── Helper: stock status ──────────────────────────────────────────────────────
 
 function stockStatus(current: number, min: number): 'danger' | 'warning' | 'ok' {
     if (current <= 0) return 'danger';
     if (current <= min) return 'warning';
     return 'ok';
+}
+
+function inferIngredientCategory(name: string): string {
+    const n = (name || '').toLowerCase();
+    if (['espresso', 'coffee', 'bean', 'roast', 'decaf', 'arabica', 'robusta', 'shot'].some(k => n.includes(k))) return 'Coffee & Espresso';
+    if (['tea', 'brew', 'matcha', 'chamomile', 'jasmine', 'earl grey'].some(k => n.includes(k))) return 'Tea & Brews';
+    if (['milk', 'cream', 'dairy', 'condensed', 'evaporated', 'cheese', 'butter', 'whip'].some(k => n.includes(k))) return 'Dairy & Milk';
+    if (['syrup', 'caramel', 'vanilla', 'hazelnut', 'sugar', 'flavor', 'sauce', 'purée', 'puree', 'honey', 'sweetener', 'chocolate'].some(k => n.includes(k))) return 'Syrups & Flavors';
+    if (['pastry', 'bread', 'bun', 'patty', 'meat', 'cake', 'cookie', 'bacon', 'biscuit', 'croissant', 'sandwich', 'ham', 'egg', 'flour', 'nori', 'aonori', 'flake', 'bonito'].some(k => n.includes(k))) return 'Pastries & Food';
+    if (['ice', 'soda', 'powder', 'beverage', 'water', 'boba', 'pearl', 'jelly', 'tapioca', 'smoothie'].some(k => n.includes(k))) return 'Ice & Beverages';
+    if (['straw', 'cup', 'lid', 'box', 'packaging', 'wrapper', 'paper', 'bag', 'napkin', 'container', 'takeout'].some(k => n.includes(k))) return 'Packaging & Supplies';
+    return 'General';
+}
+
+function getCategory(ing: { category?: string; name: string }): string {
+    if (ing.category) return ing.category;
+    return inferIngredientCategory(ing.name);
 }
 
 const STATUS_COLOR = {
@@ -78,6 +101,17 @@ function isSoonExpiry(date?: string): boolean {
     twoWeeks.setDate(twoWeeks.getDate() + 14);
     return d >= new Date() && d <= twoWeeks;
 }
+
+const CATEGORY_STYLE: Record<string, { bg: string; color: string }> = {
+    'Coffee & Espresso': { bg: 'rgba(217, 119, 6, 0.12)', color: '#d97706' },
+    'Tea & Brews': { bg: 'rgba(16, 185, 129, 0.12)', color: '#10b981' },
+    'Dairy & Milk': { bg: 'rgba(59, 130, 246, 0.12)', color: '#3b82f6' },
+    'Syrups & Flavors': { bg: 'rgba(139, 92, 246, 0.12)', color: '#8b5cf6' },
+    'Pastries & Food': { bg: 'rgba(236, 72, 153, 0.12)', color: '#ec4899' },
+    'Ice & Beverages': { bg: 'rgba(6, 182, 212, 0.12)', color: '#06b6d4' },
+    'Packaging & Supplies': { bg: 'rgba(107, 114, 128, 0.12)', color: '#6b7280' },
+    'General': { bg: 'rgba(156, 163, 175, 0.12)', color: '#9ca3af' },
+};
 
 // ── Summary Card ──────────────────────────────────────────────────────────────
 
@@ -125,10 +159,21 @@ const Recipes = () => {
     const [showAddIng, setShowAddIng] = useState(false);
     const [editIng, setEditIng] = useState<Ingredient | null>(null);
     const [ingForm, setIngForm] = useState({
-        name: '', unit: '', stock_quantity: '', min_stock_level: '', cost_per_unit: '', expiry_date: '', batch_number: '',
+        name: '', category: 'General', unit: '', stock_quantity: '', min_stock_level: '', cost_per_unit: '', expiry_date: '', batch_number: '', received_date: '',
         conversion_multiple: '', conversion_size: ''
     });
     const [ingSubmitting, setIngSubmitting] = useState(false);
+    const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+    // Category Filter & Recipe Usage Mapping
+    const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
+    const [recipeUsages, setRecipeUsages] = useState<Record<string, string[]>>({});
+
+    // Multi-Batch: source ingredient when opening modal in "new batch" mode
+    const [batchSourceIng, setBatchSourceIng] = useState<Ingredient | null>(null);
+
+    // Expiry auto-delete banner
+    const [expiredBanner, setExpiredBanner] = useState<{ name: string; quantity: number }[]>([]);
 
     // Inline restock
     const [restockId, setRestockId] = useState<string | null>(null);
@@ -177,7 +222,7 @@ const Recipes = () => {
     };
 
     useEffect(() => {
-        fetchIngredients();
+        fetchIngredientsAndCheckExpiry();
         apiClient.get(API_ENDPOINTS.PRODUCTS)
             .then(data => setProducts(Array.isArray(data) ? data : []))
             .catch(() => { });
@@ -190,6 +235,33 @@ const Recipes = () => {
             setIngredients(Array.isArray(data) ? data : []);
         } catch { }
         finally { setIngLoading(false); }
+    };
+
+    const fetchIngredientsAndCheckExpiry = async () => {
+        setIngLoading(true);
+        try {
+            const data = await apiClient.get(API_ENDPOINTS.INGREDIENTS);
+            setIngredients(Array.isArray(data) ? data : []);
+        } catch { }
+        finally { setIngLoading(false); }
+
+        // After ingredients load, run server-side expiry check
+        try {
+            const result = await apiClient.post<{ removed: { id: string; name: string; quantity: number }[] }>(
+                API_ENDPOINTS.EXPIRE_CHECK
+            );
+            if (result?.removed?.length > 0) {
+                // Remove expired IDs from local state immediately
+                const removedIds = new Set(result.removed.map(r => r.id));
+                setIngredients(prev => prev.filter(i => !removedIds.has(i.id)));
+                // Show the dismissible banner
+                setExpiredBanner(result.removed);
+                // Auto-dismiss after 8 seconds
+                setTimeout(() => setExpiredBanner([]), 8000);
+            }
+        } catch {
+            // Silently ignore expire-check errors — non-critical
+        }
     };
 
     const fetchRecipe = async (productId: string) => {
@@ -223,16 +295,17 @@ const Recipes = () => {
             const qty = row.quantity_required;
             if (qty > 0) minServable = Math.min(minServable, Math.floor(stock / qty));
         }
-        
-        // Calculate total cost per unit
+
+        // Calculate total cost per unit with effective unit cost
         let totalCost = 0;
         for (const row of recipe) {
             const costPerUnit = row.ingredients.cost_per_unit || 0;
-            const qty = row.quantity_required;
-            totalCost += costPerUnit * qty;
+            const unit = row.ingredients.unit || '';
+            const qty = row.quantity_required || 0;
+            totalCost += getEffectiveUnitCost(unit, costPerUnit) * qty;
         }
         setRecipeCost(totalCost);
-        
+
         return minServable === Infinity ? 0 : minServable;
     }, [recipe, selectedProduct]);
 
@@ -240,14 +313,24 @@ const Recipes = () => {
 
     const filteredIngredients = useMemo(() => {
         const q = searchQuery.toLowerCase().trim();
-        return q
-            ? ingredients.filter(i =>
+        return ingredients.filter(i => {
+            const cat = getCategory(i);
+            const ingUsages = recipeUsages[i.id]
+                || (i.parent_id ? recipeUsages[i.parent_id] : [])
+                || recipeUsages[i.name.toLowerCase().trim()]
+                || [];
+
+            const matchesSearch = !q || (
                 i.name.toLowerCase().includes(q) ||
                 i.unit.toLowerCase().includes(q) ||
-                (i.batch_number && i.batch_number.toLowerCase().includes(q))
-            )
-            : ingredients;
-    }, [ingredients, searchQuery]);
+                cat.toLowerCase().includes(q) ||
+                (i.batch_number && i.batch_number.toLowerCase().includes(q)) ||
+                ingUsages.some(r => r.toLowerCase().includes(q))
+            );
+            const matchesCategory = selectedCategory === 'ALL' || cat === selectedCategory;
+            return matchesSearch && matchesCategory;
+        });
+    }, [ingredients, searchQuery, selectedCategory, recipeUsages]);
 
     // ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -258,18 +341,101 @@ const Recipes = () => {
         fetchRecipe(p.id);
     };
 
+    const validateIngForm = (): boolean => {
+        const errors: Record<string, string> = {};
+
+        const name = ingForm.name.trim();
+        if (!name) {
+            errors.name = 'Ingredient name is required.';
+        } else if (name.length < 2 || name.length > 50) {
+            errors.name = 'Name must be between 2 and 50 characters.';
+        } else if (!/[a-zA-Z]/.test(name)) {
+            errors.name = 'Name must contain letters (e.g. Arabica Beans, Whole Milk).';
+        }
+
+        if (!batchSourceIng) {
+            const unit = ingForm.unit.trim();
+            if (!unit) errors.unit = 'Please select a unit.';
+            else if (unit.length > 20) errors.unit = 'Unit must not exceed 20 characters.';
+        }
+
+        const stockStr = String(ingForm.stock_quantity).trim();
+        if (stockStr !== '') {
+            const stock = Number(stockStr);
+            if (isNaN(stock)) errors.stock_quantity = 'Stock quantity must be a valid number.';
+            else if (stock < 0) errors.stock_quantity = 'Stock quantity cannot be negative.';
+            else if (stock > 50000) errors.stock_quantity = 'Stock quantity cannot exceed 50,000.';
+        }
+
+        const minStockStr = String(ingForm.min_stock_level).trim();
+        if (minStockStr !== '') {
+            const minStock = Number(minStockStr);
+            if (isNaN(minStock)) errors.min_stock_level = 'Min stock level must be a valid number.';
+            else if (minStock < 0) errors.min_stock_level = 'Min stock level cannot be negative.';
+            else if (minStock > 10000) errors.min_stock_level = 'Min stock level cannot exceed 10,000.';
+        }
+
+        const costStr = String(ingForm.cost_per_unit).trim();
+        if (costStr !== '') {
+            const cost = Number(costStr);
+            if (isNaN(cost)) errors.cost_per_unit = 'Cost per unit must be a valid number.';
+            else if (cost < 0) errors.cost_per_unit = 'Cost per unit cannot be negative.';
+            else if (cost > 50000) errors.cost_per_unit = 'Cost per unit cannot exceed ₱50,000.';
+        }
+
+        if (ingForm.expiry_date) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const maxExpDate = new Date();
+            maxExpDate.setFullYear(maxExpDate.getFullYear() + 5);
+
+            const exp = new Date(ingForm.expiry_date + 'T00:00:00');
+            if (isNaN(exp.getTime())) errors.expiry_date = 'Invalid date format.';
+            else if (exp <= today) errors.expiry_date = 'Expiry date must be in the future.';
+            else if (exp > maxExpDate) errors.expiry_date = 'Expiry date cannot exceed 5 years in advance.';
+        }
+
+        if (ingForm.received_date) {
+            const today = new Date();
+            today.setHours(23, 59, 59, 999);
+            const rec = new Date(ingForm.received_date + 'T00:00:00');
+            const minPastDate = new Date();
+            minPastDate.setFullYear(minPastDate.getFullYear() - 10);
+
+            if (isNaN(rec.getTime())) errors.received_date = 'Invalid date format.';
+            else if (rec > today) errors.received_date = 'Received date cannot be in the future.';
+            else if (rec < minPastDate) errors.received_date = 'Received date cannot be older than 10 years.';
+
+            if (ingForm.expiry_date) {
+                const exp = new Date(ingForm.expiry_date + 'T00:00:00');
+                if (!isNaN(exp.getTime()) && exp <= rec) {
+                    errors.expiry_date = 'Expiry date must be after batch received date.';
+                }
+            }
+        }
+
+        const batchNum = ingForm.batch_number.trim();
+        if (batchNum.length > 20) errors.batch_number = 'Batch number must not exceed 20 characters.';
+
+        setFormErrors(errors);
+        return Object.keys(errors).length === 0;
+    };
+
     const handleSaveIng = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!validateIngForm()) return;
         setIngSubmitting(true);
         try {
             const body = {
-                name: ingForm.name,
+                name: ingForm.name.trim(),
+                category: ingForm.category || 'General',
                 unit: ingForm.unit,
                 stock_quantity: Number(ingForm.stock_quantity) || 0,
                 min_stock_level: Number(ingForm.min_stock_level) || 0,
                 cost_per_unit: Number(ingForm.cost_per_unit) || 0,
                 expiry_date: ingForm.expiry_date || null,
-                batch_number: ingForm.batch_number.trim() || 'Main'
+                batch_number: ingForm.batch_number.trim() || 'Main',
+                received_date: ingForm.received_date || null
             };
             if (editIng) {
                 await apiClient.put(`${API_ENDPOINTS.INGREDIENTS}/${editIng.id}`, body);
@@ -278,28 +444,74 @@ const Recipes = () => {
             }
             setShowAddIng(false);
             setEditIng(null);
-            setIngForm({ name: '', unit: '', stock_quantity: '', min_stock_level: '', cost_per_unit: '', expiry_date: '', batch_number: '', conversion_multiple: '', conversion_size: '' });
+            setBatchSourceIng(null);
+            setFormErrors({});
+            setIngForm({ name: '', category: 'General', unit: '', stock_quantity: '', min_stock_level: '', cost_per_unit: '', expiry_date: '', batch_number: '', received_date: '', conversion_multiple: '', conversion_size: '' });
             fetchIngredients();
-        } catch { }
-        finally { setIngSubmitting(false); }
+        } catch (err: any) {
+            const serverMsg = err?.response?.data?.detail;
+            if (serverMsg) {
+                setFormErrors({ submit: typeof serverMsg === 'string' ? serverMsg : 'Failed to save ingredient.' });
+            } else {
+                setFormErrors({ submit: 'Failed to save ingredient. Please check your inputs.' });
+            }
+        } finally {
+            setIngSubmitting(false);
+        }
     };
 
-    const handleDeleteIng = async (id: string, name: string) => {
-        if (!window.confirm(`Delete "${name}"? This will also remove it from all recipes.`)) return;
-        await apiClient.delete(`${API_ENDPOINTS.INGREDIENTS}/${id}`);
-        fetchIngredients();
-        if (selectedProduct) fetchRecipe(selectedProduct.id);
+    const openNewBatch = (ing: Ingredient) => {
+        setBatchSourceIng(ing);
+        setEditIng(null);
+        setFormErrors({});
+        setIngForm({
+            name: ing.name,
+            category: getCategory(ing),
+            unit: ing.unit,
+            stock_quantity: '',
+            min_stock_level: String(ing.min_stock_level),
+            cost_per_unit: '',
+            expiry_date: '',
+            batch_number: '',
+            received_date: new Date().toISOString().split('T')[0],
+            conversion_multiple: '',
+            conversion_size: '',
+        });
+        setShowAddIng(true);
+    };
+
+    // Delete Ingredient modal
+    const [deleteModalIng, setDeleteModalIng] = useState<{ id: string; name: string } | null>(null);
+
+    const confirmDeleteIng = async () => {
+        if (!deleteModalIng) return;
+        setIngSubmitting(true);
+        try {
+            await apiClient.delete(`${API_ENDPOINTS.INGREDIENTS}/${deleteModalIng.id}`);
+            setDeleteModalIng(null);
+            fetchIngredients();
+            if (selectedProduct) fetchRecipe(selectedProduct.id);
+        } catch (err) {
+            alert('Failed to delete ingredient.');
+        } finally {
+            setIngSubmitting(false);
+        }
     };
 
     const openEditIng = (ing: Ingredient) => {
         setEditIng(ing);
+        setBatchSourceIng(null);
+        setFormErrors({});
         setIngForm({
-            name: ing.name, unit: ing.unit,
+            name: ing.name,
+            category: getCategory(ing),
+            unit: ing.unit,
             stock_quantity: String(ing.stock_quantity),
             min_stock_level: String(ing.min_stock_level),
             cost_per_unit: String(ing.cost_per_unit),
             expiry_date: ing.expiry_date || '',
             batch_number: ing.batch_number || '',
+            received_date: ing.received_date || '',
             conversion_multiple: '', conversion_size: ''
         });
         setShowAddIng(true);
@@ -361,8 +573,8 @@ const Recipes = () => {
                 </div>
                 <button
                     onClick={() => {
-                        setShowAddIng(true); setEditIng(null);
-                        setIngForm({ name: '', unit: '', stock_quantity: '', min_stock_level: '', cost_per_unit: '', expiry_date: '', batch_number: '', conversion_multiple: '', conversion_size: '' });
+                        setShowAddIng(true); setEditIng(null); setBatchSourceIng(null); setFormErrors({});
+                        setIngForm({ name: '', category: 'General', unit: '', stock_quantity: '', min_stock_level: '', cost_per_unit: '', expiry_date: '', batch_number: '', received_date: new Date().toISOString().split('T')[0], conversion_multiple: '', conversion_size: '' });
                     }}
                     style={{
                         background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))',
@@ -374,6 +586,44 @@ const Recipes = () => {
                     <Plus size={18} /> Add Ingredient
                 </button>
             </div>
+
+            {/* ── Expiry Auto-Delete Banner ── */}
+            {expiredBanner.length > 0 && (
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.75rem',
+                    padding: '0.85rem 1.1rem',
+                    background: 'rgba(245, 158, 11, 0.12)',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    borderRadius: '12px',
+                    animation: 'fadeInDown 0.3s ease',
+                }}>
+                    <AlertTriangle size={16} style={{ color: '#f59e0b', flexShrink: 0, marginTop: '2px' }} />
+                    <div style={{ flex: 1, fontSize: '0.875rem', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                        <strong style={{ color: '#f59e0b' }}>
+                            {expiredBanner.length} expired ingredient{expiredBanner.length > 1 ? 's' : ''} auto-moved to Waste Log:
+                        </strong>
+                        {' '}
+                        {expiredBanner.map(r => r.name).join(', ')}
+                    </div>
+                    <button
+                        onClick={() => setExpiredBanner([])}
+                        title="Dismiss"
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-muted)',
+                            cursor: 'pointer',
+                            padding: '0.15rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            flexShrink: 0,
+                        }}>
+                        <X size={16} />
+                    </button>
+                </div>
+            )}
 
             {/* ── Summary Cards ── */}
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -388,13 +638,38 @@ const Recipes = () => {
             </div>
 
             {/* ── Main Grid ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: '1.5rem', alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem', alignItems: 'start' }}>
 
                 {/* ── LEFT: Ingredient Inventory Table ── */}
                 <div className="glass-card" style={{ padding: '1.5rem', overflow: 'hidden' }}>
+                    {/* Category Filter Tabs */}
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                        {['ALL', 'Coffee & Espresso', 'Tea & Brews', 'Dairy & Milk', 'Syrups & Flavors', 'Pastries & Food', 'Ice & Beverages', 'Packaging & Supplies', 'General'].map(cat => {
+                            const active = selectedCategory === cat;
+                            return (
+                                <button
+                                    key={cat}
+                                    onClick={() => setSelectedCategory(cat)}
+                                    style={{
+                                        padding: '0.35rem 0.75rem',
+                                        borderRadius: '20px',
+                                        fontSize: '0.75rem',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        border: active ? '1px solid var(--accent-primary)' : '1px solid var(--glass-border)',
+                                        background: active ? 'rgba(139, 92, 246, 0.15)' : 'var(--bg-panel)',
+                                        color: active ? 'var(--accent-primary)' : 'var(--text-muted)',
+                                        transition: 'all 0.15s ease',
+                                    }}>
+                                    {cat === 'ALL' ? 'All Categories' : cat}
+                                </button>
+                            );
+                        })}
+                    </div>
+
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
                         <h3 style={{ margin: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            🧂 Ingredient Stock
+                            Ingredient Stock
                             <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 400, marginLeft: '0.25rem' }}>
                                 {filteredIngredients.length} items
                             </span>
@@ -403,16 +678,16 @@ const Recipes = () => {
                         <input
                             value={searchQuery}
                             onChange={e => setSearchQuery(e.target.value)}
-                            placeholder="Search ingredients…"
+                            placeholder="Search ingredients or recipes…"
                             style={{
                                 padding: '0.45rem 0.85rem',
-                                background: 'rgba(0,0,0,0.2)',
-                                border: '1px solid var(--glass-border)',
+                                background: 'var(--bg-panel)',
+                                border: '1.5px solid var(--glass-border)',
                                 borderRadius: '8px',
-                                color: 'white',
+                                color: 'var(--text-primary)',
                                 fontSize: '0.82rem',
                                 outline: 'none',
-                                width: '180px',
+                                width: '220px',
                             }}
                         />
                     </div>
@@ -429,6 +704,7 @@ const Recipes = () => {
                                 <thead>
                                     <tr style={{ borderBottom: '1px solid var(--glass-border)', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
                                         <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 500 }}>Ingredient</th>
+                                        <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 500 }}>Category</th>
                                         <th style={{ padding: '0.5rem 0.6rem', textAlign: 'left', fontWeight: 500 }}>Batch</th>
                                         <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right', fontWeight: 500 }}>Stock</th>
                                         <th style={{ padding: '0.5rem 0.6rem', textAlign: 'right', fontWeight: 500 }}>Cost</th>
@@ -441,6 +717,8 @@ const Recipes = () => {
                                         const status = stockStatus(ing.stock_quantity, ing.min_stock_level);
                                         const expSoon = isSoonExpiry(ing.expiry_date);
                                         const isRestocking = restockId === ing.id;
+                                        const displayCat = getCategory(ing);
+                                        const catStyle = CATEGORY_STYLE[displayCat] || CATEGORY_STYLE['General'];
                                         return (
                                             <>
                                                 <tr key={ing.id} style={{
@@ -464,9 +742,29 @@ const Recipes = () => {
                                                             </div>
                                                         )}
                                                     </td>
+                                                    {/* Category */}
+                                                    <td style={{ padding: '0.7rem 0.6rem' }}>
+                                                        <span style={{
+                                                            fontSize: '0.72rem',
+                                                            fontWeight: 600,
+                                                            padding: '2px 8px',
+                                                            borderRadius: '6px',
+                                                            background: catStyle.bg,
+                                                            color: catStyle.color,
+                                                            display: 'inline-block',
+                                                            whiteSpace: 'nowrap',
+                                                        }}>
+                                                            {displayCat}
+                                                        </span>
+                                                    </td>
                                                     {/* Batch */}
                                                     <td style={{ padding: '0.7rem 0.6rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                                                        {ing.batch_number || 'Main'}
+                                                        <div style={{ fontWeight: 500 }}>{ing.batch_number || 'Main'}</div>
+                                                        {ing.received_date && (
+                                                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                                                Rec: {new Date(ing.received_date + 'T00:00:00').toLocaleDateString()}
+                                                            </div>
+                                                        )}
                                                     </td>
                                                     {/* Stock qty */}
                                                     <td style={{ padding: '0.7rem 0.6rem', textAlign: 'right' }}>
@@ -483,7 +781,7 @@ const Recipes = () => {
                                                     </td>
                                                     {/* Cost */}
                                                     <td style={{ padding: '0.7rem 0.6rem', textAlign: 'right', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                                                        ₱{Number(ing.cost_per_unit).toFixed(2)}/{ing.unit}
+                                                        ₱{getEffectiveUnitCost(ing.unit, ing.cost_per_unit).toFixed(2)}/{ing.unit}
                                                     </td>
                                                     {/* Expiry */}
                                                     <td style={{ padding: '0.7rem 0.6rem', textAlign: 'center' }}>
@@ -511,7 +809,7 @@ const Recipes = () => {
                                                                     setRestockId(isRestocking ? null : ing.id);
                                                                     setRestockQty('');
                                                                 }}
-                                                                title="Restock"
+                                                                title="Quick Restock"
                                                                 style={{
                                                                     background: isRestocking ? 'rgba(16,185,129,0.2)' : 'rgba(16,185,129,0.1)',
                                                                     border: '1px solid rgba(16,185,129,0.35)',
@@ -523,11 +821,26 @@ const Recipes = () => {
                                                                 }}>
                                                                 <PlusCircle size={13} />
                                                             </button>
+                                                            {/* New Batch */}
+                                                            <button
+                                                                onClick={() => openNewBatch(ing)}
+                                                                title="New Batch"
+                                                                style={{
+                                                                    background: 'rgba(99,102,241,0.1)',
+                                                                    border: '1px solid rgba(99,102,241,0.35)',
+                                                                    color: '#6366f1',
+                                                                    borderRadius: 'var(--border-radius-sm)',
+                                                                    padding: '0.3rem 0.5rem',
+                                                                    cursor: 'pointer',
+                                                                    display: 'flex', alignItems: 'center',
+                                                                }}>
+                                                                <Layers size={13} />
+                                                            </button>
                                                             <button onClick={() => openEditIng(ing)} title="Edit"
                                                                 style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.3)', color: 'var(--accent-primary)', borderRadius: 'var(--border-radius-sm)', padding: '0.3rem 0.5rem', cursor: 'pointer' }}>
                                                                 ✏️
                                                             </button>
-                                                            <button onClick={() => handleDeleteIng(ing.id, ing.name)} title="Delete"
+                                                            <button onClick={() => setDeleteModalIng({ id: ing.id, name: ing.name })} title="Delete"
                                                                 style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: 'var(--status-danger)', borderRadius: 'var(--border-radius-sm)', padding: '0.3rem 0.5rem', cursor: 'pointer' }}>
                                                                 <Trash2 size={13} />
                                                             </button>
@@ -596,429 +909,6 @@ const Recipes = () => {
                         </div>
                     )}
                 </div>
-
-                {/* ── RIGHT: Recipe Builder ── */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                    <div className="glass-card" style={{ padding: '1.5rem' }}>
-                        <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <BookOpen size={18} /> Recipe Builder
-                        </h3>
-
-                        {/* Searchable product selector */}
-                        <div style={{ position: 'relative', marginBottom: '1.2rem' }}>
-                            <div style={{ position: 'relative' }}>
-                                <input
-                                    type="text"
-                                    placeholder="🔍 Search product…"
-                                    value={productSearch || (selectedProduct ? `${selectedProduct.name}${selectedProduct.size ? ` • ${selectedProduct.size}` : ''}${selectedProduct.unit_of_measure ? ` (${selectedProduct.unit_of_measure})` : ''}` : '')}
-                                    onChange={e => {
-                                        setProductSearch(e.target.value);
-                                        setShowProductDropdown(true);
-                                    }}
-                                    onFocus={() => setShowProductDropdown(true)}
-                                    onBlur={() => setTimeout(() => setShowProductDropdown(false), 150)}
-                                    style={{
-                                        ...inputStyle,
-                                        paddingRight: '2.5rem',
-                                        cursor: 'text',
-                                        color: productSearch ? 'white' : 'var(--text-muted)',
-                                    }}
-                                />
-                                <ChevronDown
-                                    size={16}
-                                    style={{
-                                        position: 'absolute', right: '0.85rem', top: '50%',
-                                        transform: `translateY(-50%) rotate(${showProductDropdown ? 180 : 0}deg)`,
-                                        color: 'var(--text-muted)', pointerEvents: 'none',
-                                        transition: 'transform 0.2s',
-                                    }}
-                                />
-                            </div>
-
-                            {/* Dropdown list */}
-                            {showProductDropdown && (
-                                <div style={{
-                                    position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
-                                    background: '#1a1d27',
-                                    border: '1px solid var(--glass-border)',
-                                    borderRadius: '10px',
-                                    boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-                                    zIndex: 200,
-                                    maxHeight: '220px',
-                                    overflowY: 'auto',
-                                }}>
-                                    {/* Clear selection option */}
-                                    <div
-                                        onMouseDown={() => {
-                                            setSelectedProduct(null);
-                                            setRecipe([]);
-                                            setProductSearch('');
-                                            setShowProductDropdown(false);
-                                        }}
-                                        style={{
-                                            padding: '0.6rem 0.85rem',
-                                            fontSize: '0.85rem',
-                                            color: 'var(--text-muted)',
-                                            cursor: 'pointer',
-                                            borderBottom: '1px solid var(--glass-border-light)',
-                                        }}
-                                    >
-                                        — Clear selection —
-                                    </div>
-
-                                    {products
-                                        .filter(p => {
-                                            const query = productSearch.toLowerCase();
-                                            return p.name.toLowerCase().includes(query) ||
-                                                p.unit_of_measure.toLowerCase().includes(query) ||
-                                                (p.size || '').toLowerCase().includes(query);
-                                        })
-                                        .map(p => (
-                                            <div
-                                                key={p.id}
-                                                onMouseDown={() => {
-                                                    handleSelectProduct(p);
-                                                    setProductSearch('');
-                                                    setShowProductDropdown(false);
-                                                }}
-                                                style={{
-                                                    padding: '0.6rem 0.85rem',
-                                                    fontSize: '0.875rem',
-                                                    cursor: 'pointer',
-                                                    background: selectedProduct?.id === p.id ? 'rgba(139,92,246,0.15)' : 'transparent',
-                                                    color: selectedProduct?.id === p.id ? 'var(--accent-primary)' : 'white',
-                                                    borderBottom: '1px solid var(--glass-border-light)',
-                                                    transition: 'background 0.15s',
-                                                }}
-                                                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,0,0,0.06)')}
-                                                onMouseLeave={e => (e.currentTarget.style.background = selectedProduct?.id === p.id ? 'rgba(139,92,246,0.15)' : 'transparent')}
-                                            >
-                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                                    <span>{p.name}</span>
-                                                    {(p.size || p.unit_of_measure) && (
-                                                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '6px' }}>
-                                                            {p.size ? `• ${p.size}` : ''}
-                                                            {p.size && p.unit_of_measure ? ' ' : ''}
-                                                            {p.unit_of_measure ? `(${p.unit_of_measure})` : ''}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        ))}
-
-                                    {products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
-                                        <div style={{ padding: '0.75rem 0.85rem', fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                                            No products match "{productSearch}"
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-
-                        {!selectedProduct ? (
-                            <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem 0', fontSize: '0.9rem' }}>
-                                Select a product above to view or edit its recipe.
-                            </p>
-                        ) : (
-                            <>
-                                {/* Can-make badge */}
-                                {canMake !== null && (
-                                    <div style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.6rem',
-                                        padding: '0.6rem 0.9rem',
-                                        borderRadius: '10px',
-                                        marginBottom: '1rem',
-                                        background: canMake === 0
-                                            ? 'rgba(239,68,68,0.12)'
-                                            : canMake <= 5
-                                                ? 'rgba(245,158,11,0.12)'
-                                                : 'rgba(16,185,129,0.12)',
-                                        border: `1px solid ${canMake === 0
-                                            ? 'rgba(239,68,68,0.3)'
-                                            : canMake <= 5
-                                                ? 'rgba(245,158,11,0.3)'
-                                                : 'rgba(16,185,129,0.3)'}`,
-                                    }}>
-                                        <span style={{ fontSize: '1.3rem' }}>
-                                            {canMake === 0 ? '🚫' : canMake <= 5 ? '⚠️' : '✅'}
-                                        </span>
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{
-                                                fontWeight: 700,
-                                                fontSize: '1rem',
-                                                color: canMake === 0
-                                                    ? 'var(--status-danger)'
-                                                    : canMake <= 5
-                                                        ? 'var(--status-warning)'
-                                                        : 'var(--status-success)'
-                                            }}>
-                                                Can make <span style={{ fontSize: '1.2rem' }}>{canMake}</span> unit{canMake !== 1 ? 's' : ''}
-                                            </div>
-                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                                of <strong style={{ color: 'white' }}>{selectedProduct.name}</strong> with current stock
-                                            </div>
-                                        </div>
-                                        <div style={{
-                                            textAlign: 'right',
-                                            padding: '0.5rem 0.8rem',
-                                            background: 'rgba(0,0,0,0.2)',
-                                            borderRadius: '8px',
-                                            borderLeft: '1px solid var(--glass-border-light)'
-                                        }}>
-                                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Cost per unit</div>
-                                            <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--accent-secondary)' }}>
-                                                ₱{recipeCost.toFixed(2)}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Existing recipe list */}
-                                {recipeLoading ? (
-                                    <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '1rem 0' }}>Loading recipe...</p>
-                                ) : recipe.length === 0 ? (
-                                    <p style={{ color: 'var(--text-muted)', padding: '0.5rem 0 1rem', fontSize: '0.9rem' }}>
-                                        No recipe defined yet for <strong>{selectedProduct.name}</strong>. Add ingredients below.
-                                    </p>
-                                ) : (
-                                    <div style={{ marginBottom: '1.2rem' }}>
-                                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginBottom: '0.6rem' }}>
-                                            Per 1 unit of <strong style={{ color: 'white' }}>{selectedProduct.name}</strong> sold:
-                                        </p>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                            <thead>
-                                                <tr style={{ borderBottom: '1px solid var(--glass-border)', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-                                                    <th style={{ padding: '0.45rem 0.4rem', textAlign: 'left', fontWeight: 500 }}>Ingredient</th>
-                                                    <th style={{ padding: '0.45rem 0.4rem', textAlign: 'right', fontWeight: 500 }}>Qty / Unit</th>
-                                                    <th style={{ padding: '0.45rem 0.4rem', textAlign: 'right', fontWeight: 500 }}>In Stock</th>
-                                                    <th style={{ padding: '0.45rem 0.4rem' }}></th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {recipe.map(row => {
-                                                    const s = row.ingredients.stock_quantity;
-                                                    const canMakeThis = row.quantity_required > 0 ? Math.floor(s / row.quantity_required) : Infinity;
-                                                    const isLimiting = canMake !== null && canMakeThis === canMake && canMake < Infinity;
-                                                    return (
-                                                        <tr key={row.id} style={{
-                                                            borderBottom: '1px solid var(--glass-border-light)',
-                                                            background: isLimiting ? 'rgba(239,68,68,0.05)' : 'transparent',
-                                                        }}>
-                                                            <td style={{ padding: '0.6rem 0.4rem', fontWeight: 500 }}>
-                                                                {row.ingredients.name}
-                                                            </td>
-                                                            <td style={{ padding: '0.6rem 0.4rem', textAlign: 'right', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                                                {row.quantity_required} {row.ingredients.unit}
-                                                            </td>
-                                                            <td style={{ padding: '0.6rem 0.4rem', textAlign: 'right', fontSize: '0.85rem' }}>
-                                                                <span style={{
-                                                                    color: s <= 0 ? 'var(--status-danger)' : s <= row.quantity_required * 5 ? 'var(--status-warning)' : 'var(--status-success)',
-                                                                    fontWeight: 600,
-                                                                }}>
-                                                                    {s} {row.ingredients.unit}
-                                                                </span>
-                                                            </td>
-                                                            <td style={{ padding: '0.6rem 0.4rem', textAlign: 'center' }}>
-                                                                <button onClick={() => handleRemoveFromRecipe(row.ingredient_id)} title="Remove"
-                                                                    style={{ background: 'transparent', border: 'none', color: 'var(--status-danger)', cursor: 'pointer', padding: '0.2rem' }}>
-                                                                    <Trash2 size={14} />
-                                                                </button>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                )}
-
-                                {/* ── Build / Prepare Recipe ── */}
-                                <div style={{
-                                    borderTop: '1px solid var(--glass-border)',
-                                    paddingTop: '1rem',
-                                    marginBottom: '0.5rem',
-                                }}>
-                                    <p style={{ margin: '0 0 0.75rem', fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                                        🛠️ Build / Prepare Recipe
-                                    </p>
-                                    <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '180px' }}>
-                                            <label style={{ ...labelStyle, margin: 0, whiteSpace: 'nowrap' }}>Batches:</label>
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                step="1"
-                                                value={buildQty}
-                                                onChange={e => setBuildQty(e.target.value)}
-                                                style={{ ...inputStyle, width: '90px' }}
-                                            />
-                                        </div>
-                                        <button
-                                            onClick={handleBuildRecipe}
-                                            disabled={building || recipe.length === 0 || canMake === 0}
-                                            style={{
-                                                padding: '0.65rem 1.2rem',
-                                                background: (building || recipe.length === 0 || canMake === 0)
-                                                    ? 'rgba(0,0,0,0.07)'
-                                                    : 'linear-gradient(135deg, #10b981, #059669)',
-                                                border: 'none',
-                                                borderRadius: 'var(--border-radius-md)',
-                                                color: (building || recipe.length === 0 || canMake === 0) ? 'var(--text-muted)' : 'white',
-                                                fontWeight: 700,
-                                                fontSize: '0.875rem',
-                                                cursor: (building || recipe.length === 0 || canMake === 0) ? 'not-allowed' : 'pointer',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: '0.4rem',
-                                                whiteSpace: 'nowrap',
-                                                transition: 'all 0.2s',
-                                            }}
-                                        >
-                                            {building ? (
-                                                <><RefreshCw size={15} style={{ animation: 'spin 0.8s linear infinite' }} /> Building…</>
-                                            ) : (
-                                                <>✅ Build Recipe</>
-                                            )}
-                                        </button>
-                                    </div>
-                                    {buildMessage && (
-                                        <div style={{
-                                            marginTop: '0.65rem',
-                                            padding: '0.55rem 0.9rem',
-                                            borderRadius: '8px',
-                                            fontSize: '0.84rem',
-                                            background: buildMessage.toLowerCase().includes('fail') || buildMessage.toLowerCase().includes('error')
-                                                ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)',
-                                            color: buildMessage.toLowerCase().includes('fail') || buildMessage.toLowerCase().includes('error')
-                                                ? 'var(--status-danger)' : 'var(--status-success)',
-                                            border: `1px solid ${buildMessage.toLowerCase().includes('fail') || buildMessage.toLowerCase().includes('error') ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)'}`,
-                                        }}>
-                                            {buildMessage}
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Add ingredient to recipe */}
-                                <div style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '1rem' }}>
-                                    <p style={{ margin: '0 0 0.75rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>+ Add ingredient to recipe</p>
-                                    <form onSubmit={handleAddToRecipe} style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-end' }}>
-                                        <div style={{ flex: 2 }}>
-                                            <label style={labelStyle}>Ingredient</label>
-                                            {/* Searchable ingredient combobox */}
-                                            <div style={{ position: 'relative' }}>
-                                                <input
-                                                    type="text"
-                                                    placeholder={
-                                                        addIngId
-                                                            ? ingredients.find(i => i.id === addIngId)?.name + ' (' + ingredients.find(i => i.id === addIngId)?.unit + ')'
-                                                            : '🔍 Search ingredient…'
-                                                    }
-                                                    value={ingSearch}
-                                                    onChange={e => {
-                                                        setIngSearch(e.target.value);
-                                                        setShowIngDropdown(true);
-                                                        if (e.target.value === '') setAddIngId('');
-                                                    }}
-                                                    onFocus={() => setShowIngDropdown(true)}
-                                                    onBlur={() => setTimeout(() => setShowIngDropdown(false), 150)}
-                                                    style={{
-                                                        ...inputStyle,
-                                                        paddingRight: '2rem',
-                                                        color: ingSearch ? 'white' : 'var(--text-muted)',
-                                                    }}
-                                                />
-                                                <ChevronDown size={14} style={{
-                                                    position: 'absolute', right: '0.7rem', top: '50%',
-                                                    transform: `translateY(-50%) rotate(${showIngDropdown ? 180 : 0}deg)`,
-                                                    color: 'var(--text-muted)', pointerEvents: 'none',
-                                                    transition: 'transform 0.2s',
-                                                }} />
-
-                                                {showIngDropdown && (
-                                                    <div style={{
-                                                        position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
-                                                        background: '#1a1d27',
-                                                        border: '1px solid var(--glass-border)',
-                                                        borderRadius: '10px',
-                                                        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-                                                        zIndex: 300,
-                                                        maxHeight: '180px',
-                                                        overflowY: 'auto',
-                                                    }}>
-                                                        {ingredients
-                                                            .filter(ing => !recipe.find(r => r.ingredient_id === ing.id))
-                                                            .filter(ing =>
-                                                                ing.name.toLowerCase().includes(ingSearch.toLowerCase()) ||
-                                                                (ing.batch_number && ing.batch_number.toLowerCase().includes(ingSearch.toLowerCase()))
-                                                            )
-                                                            .map(ing => (
-                                                                <div
-                                                                    key={ing.id}
-                                                                    onMouseDown={() => {
-                                                                        setAddIngId(ing.id);
-                                                                        setIngSearch('');
-                                                                        setShowIngDropdown(false);
-                                                                    }}
-                                                                    style={{
-                                                                        padding: '0.55rem 0.85rem',
-                                                                        fontSize: '0.85rem',
-                                                                        cursor: 'pointer',
-                                                                        background: addIngId === ing.id ? 'rgba(139,92,246,0.15)' : 'transparent',
-                                                                        color: addIngId === ing.id ? 'var(--accent-primary)' : 'white',
-                                                                        borderBottom: '1px solid var(--glass-border-light)',
-                                                                        display: 'flex',
-                                                                        justifyContent: 'space-between',
-                                                                        alignItems: 'center',
-                                                                    }}
-                                                                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,0,0,0.06)')}
-                                                                    onMouseLeave={e => (e.currentTarget.style.background = addIngId === ing.id ? 'rgba(139,92,246,0.15)' : 'transparent')}
-                                                                >
-                                                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                        <span>{ing.name}</span>
-                                                                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                                                                            Batch: {ing.batch_number || 'Main'}
-                                                                        </span>
-                                                                    </div>
-                                                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                                                        {ing.stock_quantity} {ing.unit} left
-                                                                    </span>
-                                                                </div>
-                                                            ))}
-                                                        {ingredients
-                                                            .filter(ing => !recipe.find(r => r.ingredient_id === ing.id))
-                                                            .filter(ing => ing.name.toLowerCase().includes(ingSearch.toLowerCase()))
-                                                            .length === 0 && (
-                                                                <div style={{ padding: '0.65rem 0.85rem', fontSize: '0.83rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                                                                    {ingSearch ? `No match for "${ingSearch}"` : 'All ingredients added'}
-                                                                </div>
-                                                            )}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <div style={{ flex: 1 }}>
-                                            <label style={labelStyle}>Qty per unit</label>
-                                            <input required type="number" min="0.001" step="any"
-                                                value={addQty} onChange={e => setAddQty(e.target.value)}
-                                                placeholder="e.g. 30" style={inputStyle} />
-                                        </div>
-                                        <button type="submit" disabled={recipeSubmitting} style={{
-                                            padding: '0.65rem 1rem',
-                                            background: 'var(--accent-primary)',
-                                            border: 'none', borderRadius: 'var(--border-radius-md)',
-                                            color: 'white', cursor: recipeSubmitting ? 'not-allowed' : 'pointer',
-                                            fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
-                                        }}>
-                                            {recipeSubmitting ? '...' : <><Plus size={15} style={{ verticalAlign: 'middle' }} /> Add</>}
-                                        </button>
-                                    </form>
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
             </div>
 
             {/* ── Add/Edit Ingredient Modal ── */}
@@ -1026,80 +916,223 @@ const Recipes = () => {
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
                     <div className="glass-panel" style={{ width: '100%', maxWidth: '480px', padding: '2rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                            <h3 style={{ margin: 0, fontSize: '1.3rem' }}>{editIng ? 'Edit Ingredient' : 'New Ingredient'}</h3>
-                            <button onClick={() => { setShowAddIng(false); setEditIng(null); }}
+                            <h3 style={{ margin: 0, fontSize: '1.3rem' }}>
+                                {editIng ? 'Edit Ingredient'
+                                    : batchSourceIng ? <><Layers size={18} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '0.4rem', color: '#6366f1' }} />New Batch — {batchSourceIng.name}</>
+                                    : 'New Ingredient'}
+                            </h3>
+                            <button onClick={() => { setShowAddIng(false); setEditIng(null); setBatchSourceIng(null); }}
                                 style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
                                 <X size={22} />
                             </button>
                         </div>
-                        <form onSubmit={handleSaveIng} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {/* New Batch hint strip */}
+                        {batchSourceIng && (
+                            <div style={{
+                                display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                padding: '0.55rem 0.85rem',
+                                background: 'rgba(99,102,241,0.09)',
+                                border: '1px solid rgba(99,102,241,0.25)',
+                                borderRadius: '8px',
+                                marginBottom: '1rem',
+                                fontSize: '0.8rem',
+                                color: '#818cf8',
+                            }}>
+                                <Layers size={13} />
+                                New separate batch row for <strong style={{ marginLeft: '0.2rem' }}>{batchSourceIng.name}</strong>. Name &amp; unit are locked to the parent.
+                            </div>
+                        )}
+                        <form onSubmit={handleSaveIng} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            {formErrors.submit && (
+                                <div style={{
+                                    padding: '0.6rem 0.85rem',
+                                    background: 'rgba(239, 68, 68, 0.12)',
+                                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                                    borderRadius: '8px',
+                                    color: 'var(--status-danger)',
+                                    fontSize: '0.82rem',
+                                    fontWeight: 500
+                                }}>
+                                    {formErrors.submit}
+                                </div>
+                            )}
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                 <div style={{ gridColumn: '1/-1' }}>
                                     <label style={labelStyle}>Ingredient Name *</label>
-                                    <input required style={inputStyle} value={ingForm.name}
-                                        onChange={e => setIngForm({ ...ingForm, name: e.target.value })}
+                                    <input style={{
+                                        ...inputStyle,
+                                        ...(batchSourceIng ? { opacity: 0.65, cursor: 'not-allowed', background: 'rgba(0,0,0,0.08)' } : {}),
+                                        ...(formErrors.name ? { borderColor: 'var(--status-danger)' } : {}),
+                                    }} value={ingForm.name}
+                                        maxLength={50}
+                                        readOnly={!!batchSourceIng}
+                                        onChange={e => {
+                                            if (!batchSourceIng) {
+                                                setIngForm({ ...ingForm, name: e.target.value });
+                                                if (formErrors.name) setFormErrors(prev => ({ ...prev, name: '' }));
+                                            }
+                                        }}
                                         placeholder="e.g. Espresso, Whole Milk" />
+                                    {formErrors.name && <div style={{ fontSize: '0.75rem', color: 'var(--status-danger)', marginTop: '0.3rem' }}>{formErrors.name}</div>}
+                                </div>
+                                <div>
+                                    <label style={labelStyle}>Category</label>
+                                    <select
+                                        disabled={!!batchSourceIng}
+                                        style={{
+                                            ...inputStyle,
+                                            appearance: 'none',
+                                            cursor: batchSourceIng ? 'not-allowed' : 'pointer',
+                                            ...(batchSourceIng ? { opacity: 0.65, background: 'rgba(0,0,0,0.08)' } : {}),
+                                        }}
+                                        value={ingForm.category}
+                                        onChange={e => setIngForm({ ...ingForm, category: e.target.value })}
+                                    >
+                                        <option value="Coffee & Espresso">Coffee &amp; Espresso</option>
+                                        <option value="Tea & Brews">Tea &amp; Brews</option>
+                                        <option value="Dairy & Milk">Dairy &amp; Milk</option>
+                                        <option value="Syrups & Flavors">Syrups &amp; Flavors</option>
+                                        <option value="Pastries & Food">Pastries &amp; Food</option>
+                                        <option value="Ice & Beverages">Ice &amp; Beverages</option>
+                                        <option value="Packaging & Supplies">Packaging &amp; Supplies</option>
+                                        <option value="General">General</option>
+                                    </select>
                                 </div>
                                 <div>
                                     <label style={labelStyle}>Unit *</label>
+                                    {batchSourceIng ? (
+                                        <input style={{
+                                            ...inputStyle,
+                                            opacity: 0.65, cursor: 'not-allowed', background: 'rgba(0,0,0,0.08)'
+                                        }} value={ingForm.unit} readOnly />
+                                    ) : (
                                     <select
-                                        required
                                         style={{
                                             ...inputStyle,
                                             appearance: 'none',
                                             cursor: 'pointer',
-                                            background: 'rgba(0,0,0,0.2)'
+                                            ...(formErrors.unit ? { borderColor: 'var(--status-danger)' } : {}),
                                         }}
                                         value={ingForm.unit}
-                                        onChange={e => setIngForm({ ...ingForm, unit: e.target.value })}
+                                        onChange={e => {
+                                            setIngForm({ ...ingForm, unit: e.target.value });
+                                            if (formErrors.unit) setFormErrors(prev => ({ ...prev, unit: '' }));
+                                        }}
                                     >
-                                        <option value="" disabled style={{ background: '#1e1e30', color: 'white' }}>Select unit...</option>
-                                        <option value="pcs" style={{ background: '#1e1e30', color: 'white' }}>pcs</option>
-                                        <option value="cups" style={{ background: '#1e1e30', color: 'white' }}>cups</option>
-                                        <option value="oz" style={{ background: '#1e1e30', color: 'white' }}>oz</option>
-                                        <option value="g" style={{ background: '#1e1e30', color: 'white' }}>g</option>
-                                        <option value="ml" style={{ background: '#1e1e30', color: 'white' }}>ml</option>
-                                        <option value="kg" style={{ background: '#1e1e30', color: 'white' }}>kg</option>
-                                        <option value="Slice" style={{ background: '#1e1e30', color: 'white' }}>Slice</option>
+                                        <option value="" disabled>Select unit...</option>
+                                        <option value="pcs">pcs</option>
+                                        <option value="cups">cups</option>
+                                        <option value="oz">oz</option>
+                                        <option value="g">g</option>
+                                        <option value="ml">ml</option>
+                                        <option value="kg">kg</option>
+                                        <option value="Slice">Slice</option>
                                     </select>
+                                    )}
+                                    {formErrors.unit && <div style={{ fontSize: '0.75rem', color: 'var(--status-danger)', marginTop: '0.3rem' }}>{formErrors.unit}</div>}
                                 </div>
                                 <div>
                                     <label style={labelStyle}>Stock Quantity</label>
-                                    <input type="number" min="0" step="0.01" style={inputStyle}
+                                    <input type="number" min="0" max="50000" step="0.01" style={{
+                                        ...inputStyle,
+                                        ...(formErrors.stock_quantity ? { borderColor: 'var(--status-danger)' } : {}),
+                                    }}
                                         value={ingForm.stock_quantity}
-                                        onChange={e => setIngForm({ ...ingForm, stock_quantity: e.target.value })}
+                                        onChange={e => {
+                                            setIngForm({ ...ingForm, stock_quantity: e.target.value });
+                                            if (formErrors.stock_quantity) setFormErrors(prev => ({ ...prev, stock_quantity: '' }));
+                                        }}
                                         placeholder="0" />
+                                    {formErrors.stock_quantity && <div style={{ fontSize: '0.75rem', color: 'var(--status-danger)', marginTop: '0.3rem' }}>{formErrors.stock_quantity}</div>}
                                 </div>
                                 <div>
                                     <label style={labelStyle}>Min Stock Level</label>
-                                    <input type="number" min="0" step="0.01" style={inputStyle}
+                                    <input type="number" min="0" max="10000" step="0.01" style={{
+                                        ...inputStyle,
+                                        ...(formErrors.min_stock_level ? { borderColor: 'var(--status-danger)' } : {}),
+                                    }}
                                         value={ingForm.min_stock_level}
-                                        onChange={e => setIngForm({ ...ingForm, min_stock_level: e.target.value })}
+                                        onChange={e => {
+                                            setIngForm({ ...ingForm, min_stock_level: e.target.value });
+                                            if (formErrors.min_stock_level) setFormErrors(prev => ({ ...prev, min_stock_level: '' }));
+                                        }}
                                         placeholder="0" />
+                                    {formErrors.min_stock_level && <div style={{ fontSize: '0.75rem', color: 'var(--status-danger)', marginTop: '0.3rem' }}>{formErrors.min_stock_level}</div>}
                                 </div>
                                 <div>
                                     <label style={labelStyle}>Cost per Unit (₱)</label>
-                                    <input type="number" min="0" step="0.01" style={inputStyle}
+                                    <input type="number" min="0" max="50000" step="0.01" style={{
+                                        ...inputStyle,
+                                        ...(formErrors.cost_per_unit ? { borderColor: 'var(--status-danger)' } : {}),
+                                    }}
                                         value={ingForm.cost_per_unit}
-                                        onChange={e => setIngForm({ ...ingForm, cost_per_unit: e.target.value })}
+                                        onChange={e => {
+                                            setIngForm({ ...ingForm, cost_per_unit: e.target.value });
+                                            if (formErrors.cost_per_unit) setFormErrors(prev => ({ ...prev, cost_per_unit: '' }));
+                                        }}
                                         placeholder="0.00" />
+                                    {formErrors.cost_per_unit && <div style={{ fontSize: '0.75rem', color: 'var(--status-danger)', marginTop: '0.3rem' }}>{formErrors.cost_per_unit}</div>}
                                 </div>
                                 <div>
                                     <label style={labelStyle}>Expiry Date (Optional)</label>
-                                    <input type="date" style={inputStyle} value={ingForm.expiry_date}
-                                        onChange={e => setIngForm({ ...ingForm, expiry_date: e.target.value })} />
+                                    <input type="date" style={{
+                                        ...inputStyle,
+                                        ...(formErrors.expiry_date ? { borderColor: 'var(--status-danger)' } : {}),
+                                    }} value={ingForm.expiry_date}
+                                        onChange={e => {
+                                            setIngForm({ ...ingForm, expiry_date: e.target.value });
+                                            if (formErrors.expiry_date) setFormErrors(prev => ({ ...prev, expiry_date: '' }));
+                                        }} />
+                                    {formErrors.expiry_date && <div style={{ fontSize: '0.75rem', color: 'var(--status-danger)', marginTop: '0.3rem' }}>{formErrors.expiry_date}</div>}
                                 </div>
-                                <div>
-                                    <label style={labelStyle}>Batch Number</label>
-                                    <input style={inputStyle} value={ingForm.batch_number}
-                                        onChange={e => setIngForm({ ...ingForm, batch_number: e.target.value })}
-                                        placeholder="e.g. B-001, Main" />
-                                </div>
-                                <div style={{ gridColumn: '1/-1', padding: '0.75rem', background: 'rgba(0,0,0,0.05)', borderRadius: '8px', border: '1px dashed var(--glass-border)' }}>
-                                    <div style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', marginBottom: '0.5rem', fontWeight: 600 }}>📦 UNIT CONVERTER (STOCKS)</div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                                                  <div>
+                                     <label style={labelStyle}>Batch</label>
+                                     <input style={{
+                                         ...inputStyle,
+                                         ...(formErrors.batch_number ? { borderColor: 'var(--status-danger)' } : {}),
+                                     }} value={ingForm.batch_number}
+                                         maxLength={20}
+                                         onChange={e => {
+                                             setIngForm({ ...ingForm, batch_number: e.target.value });
+                                             if (formErrors.batch_number) setFormErrors(prev => ({ ...prev, batch_number: '' }));
+                                         }}
+                                         placeholder="e.g. B-001, Main" />
+                                     {formErrors.batch_number && <div style={{ fontSize: '0.75rem', color: 'var(--status-danger)', marginTop: '0.3rem' }}>{formErrors.batch_number}</div>}
+                                 </div>
+                                 <div>
+                                     <label style={labelStyle}>Date Batch Arrived</label>
+                                     <input type="date" style={{
+                                         ...inputStyle,
+                                         ...(formErrors.received_date ? { borderColor: 'var(--status-danger)' } : {}),
+                                     }} value={ingForm.received_date}
+                                         onChange={e => {
+                                             setIngForm({ ...ingForm, received_date: e.target.value });
+                                             if (formErrors.received_date) setFormErrors(prev => ({ ...prev, received_date: '' }));
+                                         }} />
+                                     {formErrors.received_date && <div style={{ fontSize: '0.75rem', color: 'var(--status-danger)', marginTop: '0.3rem' }}>{formErrors.received_date}</div>}
+                                 </div>
+                                <div style={{
+                                    gridColumn: '1/-1',
+                                    padding: '0.85rem 1rem',
+                                    background: 'rgba(99, 102, 241, 0.04)',
+                                    borderRadius: '10px',
+                                    border: '1px solid rgba(99, 102, 241, 0.2)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.75rem',
+                                }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--accent-primary)', fontWeight: 600, fontSize: '0.78rem', letterSpacing: '0.02em' }}>
+                                            <Calculator size={15} />
+                                            <span>UNIT CONVERTER (STOCKS)</span>
+                                        </div>
+                                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                            Auto-fills Stock Quantity
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                                         <div>
-                                            <label style={{ ...labelStyle, fontSize: '0.7rem' }}>Multiples (e.g. 5 cartons)</label>
+                                            <label style={{ ...labelStyle, fontSize: '0.72rem', fontWeight: 500 }}>Multiples (e.g. 5 cartons)</label>
                                             <input type="number" step="any" style={inputStyle}
                                                 value={ingForm.conversion_multiple}
                                                 onChange={e => {
@@ -1109,13 +1142,13 @@ const Recipes = () => {
                                                     setIngForm({
                                                         ...ingForm,
                                                         conversion_multiple: m,
-                                                        stock_quantity: total > 0 ? String(total) : ingForm.stock_quantity
+                                                        stock_quantity: total > 0 ? String(total) : (m === '' && s === '' ? '' : ingForm.stock_quantity)
                                                     });
                                                 }}
-                                                placeholder="Qty" />
+                                                placeholder="Qty (e.g. 5)" />
                                         </div>
                                         <div>
-                                            <label style={{ ...labelStyle, fontSize: '0.7rem' }}>Size per unit (e.g. 50ml)</label>
+                                            <label style={{ ...labelStyle, fontSize: '0.72rem', fontWeight: 500 }}>Size per unit (e.g. 50ml)</label>
                                             <input type="number" step="any" style={inputStyle}
                                                 value={ingForm.conversion_size}
                                                 onChange={e => {
@@ -1125,28 +1158,174 @@ const Recipes = () => {
                                                     setIngForm({
                                                         ...ingForm,
                                                         conversion_size: s,
-                                                        stock_quantity: total > 0 ? String(total) : ingForm.stock_quantity
+                                                        stock_quantity: total > 0 ? String(total) : (m === '' && s === '' ? '' : ingForm.stock_quantity)
                                                     });
                                                 }}
-                                                placeholder="Size" />
+                                                placeholder="Size (e.g. 50)" />
                                         </div>
                                     </div>
-                                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
-                                        Result: {(parseFloat(ingForm.conversion_multiple) || 0) * (parseFloat(ingForm.conversion_size) || 0)} {ingForm.unit || 'units'}
-                                    </div>
+                                    {(() => {
+                                        const mult = parseFloat(ingForm.conversion_multiple) || 0;
+                                        const size = parseFloat(ingForm.conversion_size) || 0;
+                                        const calculatedTotal = mult * size;
+                                        const hasInputs = ingForm.conversion_multiple !== '' || ingForm.conversion_size !== '';
+                                        const unitDisplay = ingForm.unit || 'units';
+
+                                        return (
+                                            <div style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between',
+                                                padding: '0.65rem 0.85rem',
+                                                background: hasInputs && calculatedTotal > 0 ? 'rgba(16, 185, 129, 0.09)' : 'rgba(0, 0, 0, 0.04)',
+                                                border: hasInputs && calculatedTotal > 0 ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid var(--glass-border)',
+                                                borderRadius: '8px',
+                                                transition: 'all 0.2s ease',
+                                                marginTop: '0.1rem',
+                                            }}>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                                    <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', fontWeight: 600 }}>
+                                                        Calculated Total Stock
+                                                    </span>
+                                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                                        {hasInputs && mult > 0 && size > 0 ? `${mult} × ${size} ${unitDisplay}` : 'Enter quantity & unit size above'}
+                                                    </span>
+                                                </div>
+                                                <div style={{
+                                                    fontSize: '1.1rem',
+                                                    fontWeight: 700,
+                                                    color: hasInputs && calculatedTotal > 0 ? '#10b981' : 'var(--text-muted)',
+                                                    background: hasInputs && calculatedTotal > 0 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(0, 0, 0, 0.05)',
+                                                    padding: '0.35rem 0.75rem',
+                                                    borderRadius: '6px',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.35rem',
+                                                }}>
+                                                    <span>{calculatedTotal}</span>
+                                                    <span style={{ fontSize: '0.82rem', fontWeight: 500 }}>{unitDisplay}</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '0.5rem' }}>
-                                <button type="button" onClick={() => { setShowAddIng(false); setEditIng(null); }}
-                                    style={{ padding: '0.7rem 1.4rem', background: 'transparent', border: '1px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'white', cursor: 'pointer' }}>
+                                <button type="button" onClick={() => { setShowAddIng(false); setEditIng(null); setBatchSourceIng(null); }}
+                                    style={{ padding: '0.7rem 1.4rem', background: 'transparent', border: '1px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: 600 }}>
                                     Cancel
                                 </button>
                                 <button type="submit" disabled={ingSubmitting}
-                                    style={{ padding: '0.7rem 1.4rem', background: 'var(--accent-primary)', border: 'none', borderRadius: 'var(--border-radius-md)', color: 'white', cursor: ingSubmitting ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
-                                    {ingSubmitting ? 'Saving...' : editIng ? 'Save Changes' : 'Add Ingredient'}
+                                    style={{
+                                        padding: '0.7rem 1.4rem',
+                                        background: batchSourceIng
+                                            ? 'linear-gradient(135deg, #6366f1, #4f46e5)'
+                                            : 'var(--accent-primary)',
+                                        border: 'none', borderRadius: 'var(--border-radius-md)',
+                                        color: 'white', cursor: ingSubmitting ? 'not-allowed' : 'pointer', fontWeight: 600,
+                                        boxShadow: batchSourceIng ? '0 4px 12px rgba(99,102,241,0.35)' : undefined,
+                                    }}>
+                                    {ingSubmitting ? 'Saving...'
+                                        : editIng ? 'Save Changes'
+                                        : batchSourceIng ? '+ Add Batch'
+                                        : 'Add Ingredient'}
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Ingredient Confirmation Modal */}
+            {deleteModalIng && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+                    backdropFilter: 'blur(10px)',
+                    zIndex: 9999,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '1rem'
+                }}>
+                    <div style={{
+                        background: '#FFFFFF',
+                        border: '1px solid rgba(239, 68, 68, 0.25)',
+                        borderRadius: '20px',
+                        padding: '1.75rem',
+                        maxWidth: '440px',
+                        width: '100%',
+                        color: '#1F2937',
+                        boxShadow: '0 20px 40px -15px rgba(0, 0, 0, 0.2), 0 0 25px rgba(239, 68, 68, 0.1)',
+                        position: 'relative',
+                        textAlign: 'center'
+                    }}>
+                        <div style={{
+                            width: '3.5rem',
+                            height: '3.5rem',
+                            borderRadius: '50%',
+                            background: 'rgba(239, 68, 68, 0.12)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            color: '#EF4444',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            margin: '0 auto 1.25rem auto'
+                        }}>
+                            <Trash2 style={{ width: '1.75rem', height: '1.75rem' }} />
+                        </div>
+
+                        <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem', fontWeight: 700, color: '#111827' }}>
+                            Delete Ingredient?
+                        </h3>
+
+                        <p style={{ margin: '0 0 1.5rem 0', fontSize: '0.875rem', color: '#6B7280', lineHeight: '1.5' }}>
+                            Are you sure you want to delete <strong style={{ color: '#111827' }}>"{deleteModalIng.name}"</strong>? This will also remove it from all product recipes.
+                        </p>
+
+                        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+                            <button
+                                type="button"
+                                onClick={() => setDeleteModalIng(null)}
+                                disabled={ingSubmitting}
+                                style={{
+                                    flex: 1,
+                                    padding: '0.65rem 1.25rem',
+                                    background: '#F3F4F6',
+                                    border: '1px solid #E5E7EB',
+                                    borderRadius: '10px',
+                                    color: '#4B5563',
+                                    fontSize: '0.875rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s ease'
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={confirmDeleteIng}
+                                disabled={ingSubmitting}
+                                style={{
+                                    flex: 1,
+                                    padding: '0.65rem 1.25rem',
+                                    background: 'linear-gradient(135deg, #EF4444, #DC2626)',
+                                    border: 'none',
+                                    borderRadius: '10px',
+                                    color: '#FFFFFF',
+                                    fontSize: '0.875rem',
+                                    fontWeight: 600,
+                                    cursor: ingSubmitting ? 'not-allowed' : 'pointer',
+                                    opacity: ingSubmitting ? 0.7 : 1,
+                                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)',
+                                    transition: 'all 0.2s ease'
+                                }}
+                            >
+                                {ingSubmitting ? 'Deleting...' : 'Delete Ingredient'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -1155,5 +1334,7 @@ const Recipes = () => {
 };
 
 export default Recipes;
+
+
 
 

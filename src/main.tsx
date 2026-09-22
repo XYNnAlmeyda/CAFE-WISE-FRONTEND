@@ -29,13 +29,22 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 
     public render() {
         if (this.state.hasError) {
+            // In production, never show raw stack traces to end users
+            const isProd = import.meta.env.PROD;
+
             return (
                 <div style={{ padding: '2rem', maxWidth: '650px', margin: '4rem auto', background: '#fee2e2', border: '1px solid #f87171', borderRadius: '12px', color: '#991b1b', fontFamily: 'sans-serif' }}>
-                    <h2 style={{ margin: '0 0 0.5rem 0' }}>⚠️ Application Error</h2>
-                    <p style={{ fontSize: '0.9rem', marginBottom: '1rem', fontWeight: 600 }}>{this.state.error?.message || 'An unexpected error occurred.'}</p>
-                    <pre style={{ background: '#fef2f2', padding: '0.75rem', borderRadius: '6px', fontSize: '0.75rem', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
-                        {this.state.error?.stack}
-                    </pre>
+                    <h2 style={{ margin: '0 0 0.5rem 0' }}>Something went wrong</h2>
+                    <p style={{ fontSize: '0.9rem', marginBottom: '1rem', fontWeight: 600 }}>
+                        {isProd
+                            ? 'An unexpected error occurred. Please reload the page or contact support.'
+                            : (this.state.error?.message || 'An unexpected error occurred.')}
+                    </p>
+                    {!isProd && (
+                        <pre style={{ background: '#fef2f2', padding: '0.75rem', borderRadius: '6px', fontSize: '0.75rem', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
+                            {this.state.error?.stack}
+                        </pre>
+                    )}
                     <button
                         onClick={() => window.location.reload()}
                         style={{ marginTop: '1rem', padding: '0.55rem 1.2rem', background: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}

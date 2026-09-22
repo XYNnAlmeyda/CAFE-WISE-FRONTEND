@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { PackageSearch, Calendar, Plus, X } from 'lucide-react';
 import { API_ENDPOINTS } from '../lib/api';
 import { apiClient } from '../lib/apiClient';
+import { getEffectiveUnitCost } from '../lib/utils';
 
 interface WasteLog {
     id: string;
@@ -67,23 +68,37 @@ const WasteLogs = () => {
         try {
             const data = await apiClient.get(API_ENDPOINTS.WASTE);
 
+            const now = new Date();
+            const currentMonth = now.getMonth();
+            const currentYear = now.getFullYear();
+
             let totalLost = 0;
 
             const formattedLogs = data.map((log: any) => {
-                // Use ingredient cost if available, fall back to batch cost
+                const displayUnit = log.ingredients?.unit
+                    || log.products?.unit_of_measure
+                    || '';
                 const costPerUnit = log.ingredients?.cost_per_unit
                     || log.inventory_transactions?.cost_per_unit
-                    || 0;
-                const logCost = costPerUnit * log.quantity;
-                totalLost += logCost;
+                    || (log.products?.default_price ? Number(log.products.default_price) : 0);
+
+                const effCost = log.ingredients?.cost_per_unit !== undefined && log.ingredients?.cost_per_unit !== null
+                    ? getEffectiveUnitCost(displayUnit, costPerUnit)
+                    : costPerUnit;
+                const logCost = effCost * Number(log.quantity || 0);
+
+                // Add to monthly total if in current month
+                if (log.logged_date) {
+                    const logDate = new Date(log.logged_date);
+                    if (logDate.getMonth() === currentMonth && logDate.getFullYear() === currentYear) {
+                        totalLost += logCost;
+                    }
+                }
 
                 // Show ingredient name if available, fall back to product name
                 const displayName = log.ingredients?.name
                     || log.products?.name
                     || 'Unknown';
-                const displayUnit = log.ingredients?.unit
-                    || log.products?.unit_of_measure
-                    || '';
 
                 return {
                     id: log.id,
@@ -99,13 +114,18 @@ const WasteLogs = () => {
             setWasteLogs(formattedLogs);
             setTotalValueLost(totalLost);
 
-            // Compute Most Wasted Item
+            // Compute Most Wasted Item (This Month)
             const qtyByItem: Record<string, { name: string; qty: number; unit: string }> = {};
             data.forEach((log: any) => {
-                const name = log.ingredients?.name || log.products?.name || 'Unknown';
-                const unit = log.ingredients?.unit || log.products?.unit_of_measure || '';
-                if (!qtyByItem[name]) qtyByItem[name] = { name, qty: 0, unit };
-                qtyByItem[name].qty += Number(log.quantity);
+                if (log.logged_date) {
+                    const logDate = new Date(log.logged_date);
+                    if (logDate.getMonth() === currentMonth && logDate.getFullYear() === currentYear) {
+                        const name = log.ingredients?.name || log.products?.name || 'Unknown';
+                        const unit = log.ingredients?.unit || log.products?.unit_of_measure || '';
+                        if (!qtyByItem[name]) qtyByItem[name] = { name, qty: 0, unit };
+                        qtyByItem[name].qty += Number(log.quantity);
+                    }
+                }
             });
             const top = Object.values(qtyByItem).sort((a, b) => b.qty - a.qty)[0] || null;
             setMostWasted(top);
@@ -186,14 +206,13 @@ const WasteLogs = () => {
 
                         <form onSubmit={handleLogWaste} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                             <div>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Ingredient *</label>
-                                <select required value={formData.ingredient_id} onChange={e => setFormData({ ...formData, ingredient_id: e.target.value })}
-                                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'white', outline: 'none' }}>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Ingredient *</label>                                <select required value={formData.ingredient_id} onChange={e => setFormData({ ...formData, ingredient_id: e.target.value })}
+                                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,0,0,0.04)', border: '1.5px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'var(--text-primary)', outline: 'none' }}>
                                     {ingredientsList.length === 0 && (
-                                        <option value="" style={{ background: 'var(--bg-panel)' }}>No ingredients found — add some in Recipes</option>
+                                        <option value="">No ingredients found — add some in Recipes</option>
                                     )}
                                     {ingredientsList.map(i => (
-                                        <option key={i.id} value={i.id} style={{ background: 'var(--bg-panel)', color: 'white' }}>
+                                        <option key={i.id} value={i.id}>
                                             {i.name} (Batch: {i.batch_number}) — {i.unit} — ₱{i.cost_per_unit}/unit
                                         </option>
                                     ))}
@@ -205,10 +224,10 @@ const WasteLogs = () => {
                                     Quantity Lost * {selectedIngredient ? `(${selectedIngredient.unit})` : ''}
                                 </label>
                                 <input required type="number" min="0.01" step="0.01" value={formData.quantity} onChange={e => setFormData({ ...formData, quantity: e.target.value === '' ? '' : Number(e.target.value) })}
-                                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'white' }} />
+                                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,0,0,0.04)', border: '1.5px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'var(--text-primary)' }} />
                                 {selectedIngredient && formData.quantity !== '' && Number(formData.quantity) > 0 && (
                                     <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: 'var(--status-danger)' }}>
-                                        Est. cost: ₱{(selectedIngredient.cost_per_unit * Number(formData.quantity)).toFixed(2)}
+                                        Est. cost: ₱{(getEffectiveUnitCost(selectedIngredient.unit, selectedIngredient.cost_per_unit) * Number(formData.quantity)).toFixed(2)}
                                     </p>
                                 )}
                             </div>
@@ -216,17 +235,17 @@ const WasteLogs = () => {
                             <div>
                                 <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Reason *</label>
                                 <select required value={formData.reason} onChange={e => setFormData({ ...formData, reason: e.target.value })}
-                                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'white', outline: 'none' }}>
-                                    <option value="Expired" style={{ background: 'var(--bg-panel)' }}>Expired</option>
-                                    <option value="Preparation Error" style={{ background: 'var(--bg-panel)' }}>Preparation Error</option>
-                                    <option value="Spillage" style={{ background: 'var(--bg-panel)' }}>Spillage</option>
-                                    <option value="Damaged" style={{ background: 'var(--bg-panel)' }}>Damaged</option>
-                                    <option value="Other" style={{ background: 'var(--bg-panel)' }}>Other</option>
+                                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,0,0,0.04)', border: '1.5px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'var(--text-primary)', outline: 'none' }}>
+                                    <option value="Expired">Expired</option>
+                                    <option value="Preparation Error">Preparation Error</option>
+                                    <option value="Spillage">Spillage</option>
+                                    <option value="Damaged">Damaged</option>
+                                    <option value="Other">Other</option>
                                 </select>
                             </div>
 
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>
-                                <button type="button" onClick={() => setIsAddModalOpen(false)} style={{ padding: '0.75rem 1.5rem', background: 'transparent', border: '1px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'white', cursor: 'pointer' }}>Cancel</button>
+                                <button type="button" onClick={() => setIsAddModalOpen(false)} style={{ padding: '0.75rem 1.5rem', background: 'transparent', border: '1px solid var(--glass-border)', borderRadius: 'var(--border-radius-md)', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: 600 }}>Cancel</button>
                                 <button type="submit" disabled={submitting} style={{ padding: '0.75rem 1.5rem', background: 'var(--status-danger)', border: 'none', borderRadius: 'var(--border-radius-md)', color: 'white', cursor: submitting ? 'not-allowed' : 'pointer', fontWeight: 600 }}>{submitting ? 'Logging...' : 'Log Waste Entry'}</button>
                             </div>
                         </form>
@@ -240,67 +259,96 @@ const WasteLogs = () => {
                         <PackageSearch size={20} color="var(--accent-primary)" />
                         Recent Waste Entries
                     </h3>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                        <thead>
-                            <tr style={{ borderBottom: '1px solid var(--glass-border)', color: 'var(--text-secondary)' }}>
-                                <th style={{ padding: '1rem 0', fontWeight: 500 }}>Date</th>
-                                <th style={{ padding: '1rem 0', fontWeight: 500 }}>Ingredient</th>
-                                <th style={{ padding: '1rem 0', fontWeight: 500 }}>Batch #</th>
-                                <th style={{ padding: '1rem 0', fontWeight: 500 }}>Quantity</th>
-                                <th style={{ padding: '1rem 0', fontWeight: 500 }}>Reason</th>
-                                <th style={{ padding: '1rem 0', fontWeight: 500 }}>Est. Cost</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {loading ? (
-                                <tr>
-                                    <td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                        Loading waste logs...
-                                    </td>
+                    <div className="table-responsive">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                            <thead>
+                                <tr style={{ borderBottom: '1px solid var(--glass-border)', color: 'var(--text-secondary)' }}>
+                                    <th style={{ padding: '1rem 0', fontWeight: 500 }}>Date</th>
+                                    <th style={{ padding: '1rem 0', fontWeight: 500 }}>Ingredient</th>
+                                    <th style={{ padding: '1rem 0', fontWeight: 500 }}>Batch #</th>
+                                    <th style={{ padding: '1rem 0', fontWeight: 500 }}>Quantity</th>
+                                    <th style={{ padding: '1rem 0', fontWeight: 500 }}>Reason</th>
+                                    <th style={{ padding: '1rem 0', fontWeight: 500 }}>Est. Cost</th>
                                 </tr>
-                            ) : wasteLogs.length === 0 ? (
-                                <tr>
-                                    <td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                        No waste logs found.
-                                    </td>
-                                </tr>
-                            ) : (
-                                wasteLogs.map(log => (
-                                    <tr key={log.id} style={{ borderBottom: '1px solid var(--glass-border-light)' }}>
-                                        <td style={{ padding: '1rem 0', color: 'var(--text-muted)' }}>{log.date}</td>
-                                        <td style={{ padding: '1rem 0', fontWeight: 500 }}>{log.ingredient_name}</td>
-                                        <td style={{ padding: '1rem 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{log.batch_number}</td>
-                                        <td style={{ padding: '1rem 0', color: 'var(--status-warning)' }}>{log.quantity}</td>
-                                        <td style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>{log.reason}</td>
-                                        <td style={{ padding: '1rem 0', fontWeight: 600, color: 'var(--status-danger)' }}>{log.cost}</td>
+                            </thead>
+                            <tbody>
+                                {loading ? (
+                                    <tr>
+                                        <td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            Loading waste logs...
+                                        </td>
                                     </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
+                                ) : wasteLogs.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            No waste logs found.
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    wasteLogs.map(log => (
+                                        <tr key={log.id} style={{ borderBottom: '1px solid var(--glass-border-light)' }}>
+                                            <td style={{ padding: '1rem 0', color: 'var(--text-muted)' }}>{log.date}</td>
+                                            <td style={{ padding: '1rem 0', fontWeight: 500 }}>{log.ingredient_name}</td>
+                                            <td style={{ padding: '1rem 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{log.batch_number}</td>
+                                            <td style={{ padding: '1rem 0', color: 'var(--status-warning)' }}>{log.quantity}</td>
+                                            <td style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>{log.reason}</td>
+                                            <td style={{ padding: '1rem 0', fontWeight: 600, color: 'var(--status-danger)' }}>{log.cost}</td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
-                <div className="col-span-4 glass-card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
-                    <h3 style={{ margin: '0 0 1rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div className="col-span-4 glass-card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', height: 'fit-content' }}>
+                    <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <Calendar size={20} color="var(--status-info)" />
                         Waste Summary (This Month)
                     </h3>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '1.5rem' }}>
-                        <div>
-                            <p style={{ margin: '0 0 0.5rem 0', color: 'var(--text-secondary)' }}>Total Value Lost</p>
-                            <h2 style={{ margin: 0, fontSize: '2.5rem', color: 'var(--status-danger)' }}>₱{totalValueLost.toFixed(2)}</h2>
-                        </div>
-                        <div>
-                            <p style={{ margin: '0 0 0.5rem 0', color: 'var(--text-secondary)' }}>Most Wasted Item</p>
-                            {mostWasted ? (
-                                <h4 style={{ margin: 0, fontSize: '1.25rem' }}>
-                                    {mostWasted.name}{' '}
-                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: 400 }}>({mostWasted.qty} {mostWasted.unit})</span>
-                                </h4>
-                            ) : (
-                                <p style={{ margin: 0, color: 'var(--text-muted)' }}>No data yet</p>
-                            )}
-                        </div>
+
+                    <div style={{
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                        borderRadius: 'var(--border-radius-md)',
+                        padding: '1.25rem'
+                    }}>
+                        <p style={{ margin: '0 0 0.4rem 0', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: 500 }}>Total Value Lost</p>
+                        <h2 style={{ margin: 0, fontSize: '2.25rem', fontWeight: 700, color: 'var(--status-danger)' }}>
+                            ₱{totalValueLost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </h2>
+                    </div>
+
+                    <div style={{
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        border: '1px solid var(--glass-border-light)',
+                        borderRadius: 'var(--border-radius-md)',
+                        padding: '1.25rem'
+                    }}>
+                        <p style={{ margin: '0 0 0.4rem 0', color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: 500 }}>Most Wasted Item</p>
+                        {mostWasted ? (
+                            <div>
+                                <h4 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 600 }}>{mostWasted.name}</h4>
+                                <p style={{ margin: '0.25rem 0 0 0', color: 'var(--status-warning)', fontSize: '0.9rem', fontWeight: 500 }}>
+                                    {mostWasted.qty.toLocaleString()} {mostWasted.unit}
+                                </p>
+                            </div>
+                        ) : (
+                            <p style={{ margin: 0, color: 'var(--text-muted)' }}>No data yet</p>
+                        )}
+                    </div>
+
+                    <div style={{
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        border: '1px solid var(--glass-border-light)',
+                        borderRadius: 'var(--border-radius-md)',
+                        padding: '1rem 1.25rem',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                    }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Total Entries Logged</span>
+                        <span style={{ fontWeight: 600, fontSize: '1.1rem', color: 'var(--text-primary)' }}>{wasteLogs.length}</span>
                     </div>
                 </div>
             </div>

@@ -250,7 +250,7 @@ const ActivityHistory: React.FC = () => {
 
                     {/* Filter Pills */}
                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        {['ALL', 'RECIPE', 'WASTE', 'STAFF', 'PRODUCTS', 'SALES', 'SHIFT'].map(cat => {
+                        {['ALL', 'RECIPE', 'WASTE', 'STAFF', 'PRODUCTS', 'SALES', 'SHIFT', 'SETTINGS'].map(cat => {
                             const active = filterType === cat;
                             return (
                                 <button
@@ -268,7 +268,11 @@ const ActivityHistory: React.FC = () => {
                                         transition: 'all 0.2s',
                                     }}
                                 >
-                                    {cat === 'ALL' ? 'All Activities' : cat.charAt(0) + cat.slice(1).toLowerCase()}
+                                    {cat === 'ALL'
+                                        ? 'All Activities'
+                                        : cat === 'SETTINGS'
+                                            ? 'Settings'
+                                            : cat.charAt(0) + cat.slice(1).toLowerCase()}
                                 </button>
                             );
                         })}
@@ -360,7 +364,7 @@ const ActivityHistory: React.FC = () => {
                                         </div>
 
                                         <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', margin: '0.35rem 0 0.5rem', lineHeight: 1.5 }}>
-                                            {log.details}
+                                            {(log.details || '').replace(/\s*\(ID:\s*[a-f0-9-]{36}\)/gi, '')}
                                         </p>
 
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.78rem' }}>

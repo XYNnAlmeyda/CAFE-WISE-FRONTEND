@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Bell, AlertTriangle, Package, X, Shield, Users, Timer, Play, Square, CheckCircle } from 'lucide-react';
+import { Bell, AlertTriangle, Package, X, Shield, Users, Timer, Play, Square, CheckCircle, Menu } from 'lucide-react';
 import { API_ENDPOINTS } from '../../lib/api';
 import { apiClient } from '../../lib/apiClient';
 import { useAuth } from '../../lib/AuthContext';
@@ -28,7 +28,11 @@ interface Shift {
     status: 'OPEN' | 'CLOSED';
 }
 
-const Topbar = () => {
+interface TopbarProps {
+    onToggleMobileNav?: () => void;
+}
+
+const Topbar = ({ onToggleMobileNav }: TopbarProps) => {
     const { role, fullName } = useAuth();
     const [open, setOpen] = useState(false);
     const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -55,6 +59,17 @@ const Topbar = () => {
     useEffect(() => {
         fetchNotifications();
         fetchCurrentShift();
+
+        const handleShiftUpdate = () => fetchCurrentShift();
+        window.addEventListener('sale-recorded', handleShiftUpdate);
+        window.addEventListener('shift-changed', handleShiftUpdate);
+        window.addEventListener('focus', handleShiftUpdate);
+
+        return () => {
+            window.removeEventListener('sale-recorded', handleShiftUpdate);
+            window.removeEventListener('shift-changed', handleShiftUpdate);
+            window.removeEventListener('focus', handleShiftUpdate);
+        };
     }, []);
 
     useEffect(() => {
@@ -79,26 +94,41 @@ const Topbar = () => {
         }
     };
 
+    const _MAX_FLOAT = 500000;
+
     const handleOpenShift = async (e: React.FormEvent) => {
         e.preventDefault();
+        const cashVal = Number(openingCash);
+        const ewVal = Number(openingEwallet);
+
+        if (isNaN(cashVal) || cashVal < 0 || cashVal > _MAX_FLOAT) {
+            setShiftMsg({ type: 'error', text: `Opening cash float must be between ₱0 and ₱${_MAX_FLOAT.toLocaleString()}` });
+            return;
+        }
+        if (isNaN(ewVal) || ewVal < 0 || ewVal > _MAX_FLOAT) {
+            setShiftMsg({ type: 'error', text: `Opening e-wallet float must be between ₱0 and ₱${_MAX_FLOAT.toLocaleString()}` });
+            return;
+        }
+
         setShiftSubmitting(true);
         setShiftMsg(null);
         try {
             const res = await apiClient.post(`${API_ENDPOINTS.SHIFTS}/open`, {
-                opening_cash: Number(openingCash) || 0,
-                opening_ewallet: Number(openingEwallet) || 0
+                opening_cash: cashVal,
+                opening_ewallet: ewVal
             });
             setCurrentShift({
                 id: res.shift_id,
                 opened_by: res.opened_by,
                 opened_at: res.opened_at,
                 opening_cash: res.opening_cash,
-                opening_ewallet: Number(openingEwallet) || 0,
+                opening_ewallet: ewVal,
                 status: 'OPEN'
             });
             setOpeningCash('');
             setOpeningEwallet('');
             setShiftMsg({ type: 'success', text: 'Shift opened!' });
+            window.dispatchEvent(new Event('shift-changed'));
             setTimeout(() => { setShiftMsg(null); setShiftOpen(false); }, 1500);
         } catch (err: any) {
             setShiftMsg({ type: 'error', text: err.message || 'Failed to open shift' });
@@ -109,19 +139,32 @@ const Topbar = () => {
 
     const handleCloseShift = async (e: React.FormEvent) => {
         e.preventDefault();
+        const cashVal = Number(closingCash);
+        const ewVal = Number(closingEwallet);
+
+        if (isNaN(cashVal) || cashVal < 0 || cashVal > _MAX_FLOAT) {
+            setShiftMsg({ type: 'error', text: `Closing cash amount must be between ₱0 and ₱${_MAX_FLOAT.toLocaleString()}` });
+            return;
+        }
+        if (isNaN(ewVal) || ewVal < 0 || ewVal > _MAX_FLOAT) {
+            setShiftMsg({ type: 'error', text: `Closing e-wallet amount must be between ₱0 and ₱${_MAX_FLOAT.toLocaleString()}` });
+            return;
+        }
+
         setShiftSubmitting(true);
         setShiftMsg(null);
         try {
             await apiClient.post(`${API_ENDPOINTS.SHIFTS}/close`, {
-                closing_cash: Number(closingCash) || 0,
-                closing_ewallet: Number(closingEwallet) || 0,
-                notes: shiftNotes
+                closing_cash: cashVal,
+                closing_ewallet: ewVal,
+                notes: shiftNotes.trim().slice(0, 500)
             });
             setCurrentShift(null);
             setClosingCash('');
             setClosingEwallet('');
             setShiftNotes('');
             setShiftMsg({ type: 'success', text: 'Shift closed!' });
+            window.dispatchEvent(new Event('shift-changed'));
             setTimeout(() => { setShiftMsg(null); setShiftOpen(false); }, 1500);
         } catch (err: any) {
             setShiftMsg({ type: 'error', text: err.message || 'Failed to close shift' });
@@ -132,13 +175,14 @@ const Topbar = () => {
 
     const fetchNotifications = async () => {
         try {
-            const [alertsData, products] = await Promise.all([
+            const [alertsData, products, ingredients] = await Promise.all([
                 apiClient.get(API_ENDPOINTS.ALERTS),
-                apiClient.get(API_ENDPOINTS.INVENTORY)
+                apiClient.get(API_ENDPOINTS.INVENTORY),
+                apiClient.get(API_ENDPOINTS.INGREDIENTS)
             ]);
             const notifs: Notification[] = [];
 
-            if (alertsData) {
+            if (alertsData && Array.isArray(alertsData)) {
                 alertsData.forEach((batch: any) => {
                     const daysLeft = Math.ceil((new Date(batch.expiry_date).getTime() - new Date().getTime()) / (1000 * 3600 * 24));
                     // Show if it expires within 7 days, OR if it's already expired (daysLeft <= 0)
@@ -147,7 +191,7 @@ const Topbar = () => {
                             id: `exp-${batch.id}`,
                             type: 'expiry',
                             title: daysLeft < 0 ? `Expired: ${batch.products?.name || 'Unknown'}` : `Expiring Soon: ${batch.products?.name || 'Unknown'}`,
-                            detail: `Batch ${batch.batch_number || ''} · Qty: ${batch.quantity} ${batch.products?.unit_of_measure || ''}`,
+                            detail: `Batch ${batch.batch_number || 'Main'} · Qty: ${batch.quantity} ${batch.products?.unit_of_measure || ''}`,
                             daysLeft,
                             batchId: batch.id,
                             quantity: batch.quantity
@@ -156,23 +200,56 @@ const Topbar = () => {
                 });
             }
 
-            if (products) {
+            if (products && Array.isArray(products)) {
                 products.forEach((p: any) => {
-                    const activeBatches = (p.inventory_transactions || []).filter((b: any) => b.status === 'ACTIVE');
-                    const totalStock = activeBatches.reduce((s: number, b: any) => s + Number(b.quantity), 0);
+                    if (p.is_active === false) return; // Skip inactive products
+
+                    const batchStock = (p.inventory_transactions || [])
+                        .filter((b: any) => b.status === 'ACTIVE')
+                        .reduce((s: number, b: any) => s + Number(b.quantity), 0);
+
+                    // Use recipe_stock if product relies on recipe ingredients
+                    const totalStock = p.recipe_stock != null ? Number(p.recipe_stock) : batchStock;
+                    const reorderLvl = p.reorder_level != null ? Number(p.reorder_level) : 5;
+
                     if (totalStock === 0) {
+                        const detailStr = p.limiting_ingredient
+                            ? `Out of stock: ${p.limiting_ingredient} is depleted.`
+                            : `No active stock. Please restock immediately.`;
                         notifs.push({
                             id: `out-${p.id}`,
                             type: 'lowstock',
                             title: `Out of Stock: ${p.name}`,
-                            detail: `No active stock. Please restock immediately.`
+                            detail: detailStr
                         });
-                    } else if (totalStock <= p.reorder_level) {
+                    } else if (totalStock <= reorderLvl) {
                         notifs.push({
                             id: `low-${p.id}`,
                             type: 'lowstock',
                             title: `Low Stock: ${p.name}`,
-                            detail: `Only ${totalStock} ${p.unit_of_measure} left (reorder at ${p.reorder_level})`
+                            detail: `Only ${totalStock} ${p.unit_of_measure || 'pcs'} left (reorder at ${reorderLvl})`
+                        });
+                    }
+                });
+            }
+
+            if (ingredients && Array.isArray(ingredients)) {
+                ingredients.forEach((ing: any) => {
+                    const qty = Number(ing.stock_quantity || 0);
+                    const minLvl = Number(ing.min_stock_level || 0);
+                    if (qty === 0) {
+                        notifs.push({
+                            id: `ing-out-${ing.id}`,
+                            type: 'lowstock',
+                            title: `Ingredient Out of Stock: ${ing.name}`,
+                            detail: `Stock is 0 ${ing.unit || ''}. Please restock ingredient.`
+                        });
+                    } else if (minLvl > 0 && qty <= minLvl) {
+                        notifs.push({
+                            id: `ing-low-${ing.id}`,
+                            type: 'lowstock',
+                            title: `Low Ingredient Stock: ${ing.name}`,
+                            detail: `Only ${qty} ${ing.unit || ''} left (minimum: ${minLvl} ${ing.unit || ''})`
                         });
                     }
                 });
@@ -182,6 +259,8 @@ const Topbar = () => {
                 if (a.daysLeft !== undefined && b.daysLeft !== undefined) return a.daysLeft - b.daysLeft;
                 if (a.daysLeft !== undefined) return -1;
                 if (b.daysLeft !== undefined) return 1;
+                if (a.title.startsWith('Out of Stock') && !b.title.startsWith('Out of Stock')) return -1;
+                if (!a.title.startsWith('Out of Stock') && b.title.startsWith('Out of Stock')) return 1;
                 return 0;
             });
 
@@ -195,26 +274,27 @@ const Topbar = () => {
     const unread = notifications.length;
 
     return (
-        <header style={{
-            height: 'var(--topbar-height)',
-            padding: '0 2rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            borderBottom: '1px solid var(--glass-border)',
-            position: 'sticky',
-            top: 0,
-            zIndex: 100
-        }} className="glass-panel">
+        <header className="topbar-container glass-panel">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button
+                    onClick={onToggleMobileNav}
+                    className="mobile-menu-toggle-btn"
+                    aria-label="Toggle Navigation Menu"
+                >
+                    <Menu size={22} />
+                </button>
+            </div>
 
-            <div style={{ flex: 1 }} />
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
 
                 {/* Shift Status Widget */}
                 <div ref={shiftRef} style={{ position: 'relative' }}>
                     <button
-                        onClick={() => setShiftOpen(o => !o)}
+                        onClick={() => {
+                            setShiftOpen(o => !o);
+                            // Refresh shift data every time the panel is opened
+                            fetchCurrentShift();
+                        }}
                         style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -331,35 +411,43 @@ const Topbar = () => {
 
                                         {/* Opening Floats */}
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.3rem' }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', overflow: 'hidden' }}>
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>Opening Cash</span>
-                                                <strong>PHP {Number(currentShift.opening_cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                                                <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`PHP ${Number(currentShift.opening_cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}>
+                                                    PHP {Number(currentShift.opening_cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </strong>
                                             </div>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', overflow: 'hidden' }}>
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>Opening E-Wallet</span>
-                                                <strong>PHP {Number(currentShift.opening_ewallet || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                                                <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`PHP ${Number(currentShift.opening_ewallet || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}>
+                                                    PHP {Number(currentShift.opening_ewallet || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </strong>
                                             </div>
                                         </div>
 
                                         {/* Shift Sales Breakdown */}
                                         <div style={{ height: '1px', background: 'var(--glass-border-light)' }} />
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981' }}>
-                                            <span>Cash Sales:</span> <strong>+PHP {Number(currentShift.cash_sales || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981', overflow: 'hidden' }}>
+                                            <span>Cash Sales:</span> <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>+PHP {Number(currentShift.cash_sales || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                                         </div>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#06b6d4' }}>
-                                            <span>E-Wallet Sales:</span> <strong>+PHP {Number(currentShift.ewallet_sales || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#06b6d4', overflow: 'hidden' }}>
+                                            <span>E-Wallet Sales:</span> <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>+PHP {Number(currentShift.ewallet_sales || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
                                         </div>
 
                                         {/* Expected Totals */}
                                         <div style={{ height: '1px', borderTop: '1px dashed var(--glass-border)', marginTop: '0.1rem' }} />
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.3rem', paddingTop: '0.2rem', fontWeight: 700 }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', overflow: 'hidden' }}>
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontWeight: 400 }}>Expected Cash</span>
-                                                <span style={{ color: '#10b981' }}>PHP {Number(currentShift.expected_cash ?? currentShift.opening_cash ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                <span style={{ color: '#10b981', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`PHP ${Number(currentShift.expected_cash ?? currentShift.opening_cash ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}>
+                                                    PHP {Number(currentShift.expected_cash ?? currentShift.opening_cash ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </span>
                                             </div>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', overflow: 'hidden' }}>
                                                 <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontWeight: 400 }}>Expected E-Wallet</span>
-                                                <span style={{ color: '#06b6d4' }}>PHP {Number(currentShift.expected_ewallet ?? currentShift.opening_ewallet ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                                <span style={{ color: '#06b6d4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`PHP ${Number(currentShift.expected_ewallet ?? currentShift.opening_ewallet ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}>
+                                                    PHP {Number(currentShift.expected_ewallet ?? currentShift.opening_ewallet ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </span>
                                             </div>
                                         </div>
                                     </div>
@@ -370,7 +458,7 @@ const Topbar = () => {
                                                 Closing Cash (PHP)
                                             </label>
                                             <input
-                                                type="number" step="0.01" min="0" required
+                                                type="number" step="0.01" min="0" max="500000" required
                                                 value={closingCash} onChange={e => setClosingCash(e.target.value)}
                                                 style={{
                                                     width: '100%', padding: '0.5rem 0.65rem',
@@ -386,7 +474,7 @@ const Topbar = () => {
                                                 Closing E-Wallet (PHP)
                                             </label>
                                             <input
-                                                type="number" step="0.01" min="0" required
+                                                type="number" step="0.01" min="0" max="500000" required
                                                 value={closingEwallet} onChange={e => setClosingEwallet(e.target.value)}
                                                 style={{
                                                     width: '100%', padding: '0.5rem 0.65rem',
@@ -404,7 +492,7 @@ const Topbar = () => {
                                             Shift Notes / Comments (Optional)
                                         </label>
                                         <textarea
-                                            rows={2}
+                                            rows={2} maxLength={500}
                                             value={shiftNotes} onChange={e => setShiftNotes(e.target.value)}
                                             style={{
                                                 width: '100%', padding: '0.55rem 0.75rem',

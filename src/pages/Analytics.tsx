@@ -4,8 +4,10 @@ import {
     ResponsiveContainer, Cell, LabelList
 } from 'recharts';
 import SalesChart from '../components/dashboard/SalesChart';
+import ProductForecastTable from '../components/analytics/ProductForecastTable';
 import { API_ENDPOINTS } from '../lib/api';
 import { apiClient } from '../lib/apiClient';
+import { getEffectiveUnitCost } from '../lib/utils';
 
 const COLORS = ['var(--accent-primary)', 'var(--status-info)', 'var(--status-warning)', 'var(--status-danger)', 'var(--text-muted)'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -44,8 +46,10 @@ const Analytics = () => {
                 wasteLogs.forEach((log: any) => {
                     const date = new Date(log.logged_date);
                     const dayName = DAYS[date.getDay()];
-                    const cost = log.ingredients?.cost_per_unit || 0;
-                    const value = Number(log.quantity) * Number(cost);
+                    const costPerUnit = log.ingredients?.cost_per_unit || 0;
+                    const unit = log.ingredients?.unit || '';
+                    const effCost = getEffectiveUnitCost(unit, costPerUnit);
+                    const value = Number(log.quantity) * Number(effCost);
 
                     const dayData = weekData.find(d => d.name === dayName);
                     if (dayData) dayData.amount += value;
@@ -62,12 +66,18 @@ const Analytics = () => {
 
             <div>
                 <h2 style={{ fontSize: '1.875rem', margin: '0 0 0.25rem 0' }}>Analytics Deep Dive</h2>
-                <p style={{ color: 'var(--text-muted)', margin: 0 }}>Advanced metrics, forecasting, and waste analysis reports.</p>
+                <p style={{ color: 'var(--text-muted)', margin: 0 }}>Advanced metrics, product demand forecasting, and inventory risk reports.</p>
             </div>
 
             <div className="dashboard-grid">
                 <div className="col-span-12">
                     <SalesChart />
+                </div>
+            </div>
+
+            <div className="dashboard-grid">
+                <div className="col-span-12">
+                    <ProductForecastTable />
                 </div>
             </div>
 

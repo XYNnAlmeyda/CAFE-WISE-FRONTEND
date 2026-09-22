@@ -21,12 +21,9 @@ const StatCard: React.FC<StatCardProps> = ({ title, value, trend, isPositive = t
                 animationDelay: `${delay}s`
             }}
         >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: 500, margin: 0 }}>
-                    {title}
-                </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                 <div style={{
-                    padding: '0.5rem',
+                    padding: '0.4rem',
                     background: 'rgba(255,255,255,0.05)',
                     borderRadius: 'var(--border-radius-sm)',
                     color: 'var(--accent-primary)',
@@ -36,6 +33,9 @@ const StatCard: React.FC<StatCardProps> = ({ title, value, trend, isPositive = t
                 }}>
                     {icon}
                 </div>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: 500, margin: 0 }}>
+                    {title}
+                </p>
             </div>
 
             <div>

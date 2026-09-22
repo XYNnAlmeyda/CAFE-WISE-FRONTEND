@@ -17,6 +17,7 @@ const ExpiryAlerts = () => {
     const [alerts, setAlerts] = useState<ExpiryAlert[]>([]);
     const [loading, setLoading] = useState(true);
     const [disposingId, setDisposingId] = useState<string | null>(null);
+    const [itemToDispose, setItemToDispose] = useState<ExpiryAlert | null>(null);
 
     useEffect(() => {
         fetchAlerts();
@@ -52,9 +53,14 @@ const ExpiryAlerts = () => {
         }
     };
 
-    const handleDispose = async (item: ExpiryAlert) => {
-        if (!window.confirm(`Are you sure you want to dispose of ${item.product} (${item.quantity})? This will remove the stock and log it as waste.`)) return;
+    const handleDisposeClick = (item: ExpiryAlert) => {
+        setItemToDispose(item);
+    };
 
+    const executeDispose = async () => {
+        if (!itemToDispose) return;
+
+        const item = itemToDispose;
         setDisposingId(item.id);
         try {
             // Extract numeric quantity
@@ -63,17 +69,21 @@ const ExpiryAlerts = () => {
             await apiClient.post(API_ENDPOINTS.WASTE, {
                 ingredient_id: item.id,
                 quantity: numericQty,
-                reason: 'Expired'
+                reason: 'Expired',
+                remove_ingredient: true
             });
 
+            setAlerts(prev => prev.filter(a => a.id !== item.id));
+            setItemToDispose(null);
             await fetchAlerts();
         } catch (error) {
             console.error("Error disposing item:", error);
-            window.alert('An error occurred.');
+            alert('An error occurred while disposing ingredient.');
         } finally {
             setDisposingId(null);
         }
     };
+
     return (
         <>
             <div className="glass-card animate-fade-in" style={{ padding: '1.5rem', height: '400px', display: 'flex', flexDirection: 'column', animationDelay: '0.3s' }}>
@@ -226,7 +236,7 @@ const ExpiryAlerts = () => {
                                             disabled={disposingId === alert.id}
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                handleDispose(alert);
+                                                handleDisposeClick(alert);
                                             }}
                                             style={{
                                                 background: 'rgba(239, 68, 68, 0.1)',
@@ -249,6 +259,106 @@ const ExpiryAlerts = () => {
                                     </div>
                                 </div>
                             ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Custom Disposal Confirmation Modal */}
+            {itemToDispose && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)',
+                    zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: '1.5rem'
+                }}>
+                    <div className="glass-panel animate-scale-up" style={{
+                        width: '100%', maxWidth: '440px',
+                        background: 'var(--bg-panel, #1e1e24)',
+                        borderRadius: 'var(--border-radius-lg, 12px)',
+                        border: '1px solid var(--glass-border, rgba(255,255,255,0.12))',
+                        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)',
+                        padding: '1.75rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1.25rem'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <div style={{
+                                width: '42px', height: '42px', borderRadius: '50%',
+                                background: 'rgba(239, 68, 68, 0.15)',
+                                border: '1px solid rgba(239, 68, 68, 0.3)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                flexShrink: 0
+                            }}>
+                                <AlertTriangle size={22} color="#ef4444" />
+                            </div>
+                            <div>
+                                <h3 style={{ margin: 0, fontSize: '1.125rem', color: 'var(--text-primary, #fff)', fontWeight: 600 }}>
+                                    Confirm Disposal & Removal
+                                </h3>
+                                <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted, #94a3b8)' }}>
+                                    This action cannot be undone.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div style={{
+                            background: 'rgba(0,0,0,0.25)',
+                            border: '1px solid rgba(255,255,255,0.06)',
+                            borderRadius: 'var(--border-radius-md, 8px)',
+                            padding: '1rem',
+                            fontSize: '0.875rem',
+                            lineHeight: '1.5',
+                            color: 'var(--text-secondary, #cbd5e1)'
+                        }}>
+                            Are you sure you want to dispose of <strong style={{ color: '#fff' }}>{itemToDispose.product}</strong> ({itemToDispose.quantity})?
+                            <br /><br />
+                            This will log the item as waste and permanently remove the ingredient from your inventory.
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+                            <button
+                                disabled={disposingId === itemToDispose.id}
+                                onClick={() => setItemToDispose(null)}
+                                style={{
+                                    background: 'rgba(255,255,255,0.06)',
+                                    border: '1px solid var(--glass-border, rgba(255,255,255,0.12))',
+                                    color: 'var(--text-primary, #fff)',
+                                    padding: '0.55rem 1.1rem',
+                                    borderRadius: 'var(--border-radius-sm, 6px)',
+                                    fontSize: '0.875rem',
+                                    cursor: disposingId === itemToDispose.id ? 'not-allowed' : 'pointer',
+                                    fontWeight: 500,
+                                    transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={(e) => { if (disposingId !== itemToDispose.id) e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                            >
+                                Cancel
+                            </button>
+
+                            <button
+                                disabled={disposingId === itemToDispose.id}
+                                onClick={executeDispose}
+                                style={{
+                                    background: '#ef4444',
+                                    border: 'none',
+                                    color: '#ffffff',
+                                    padding: '0.55rem 1.25rem',
+                                    borderRadius: 'var(--border-radius-sm, 6px)',
+                                    fontSize: '0.875rem',
+                                    cursor: disposingId === itemToDispose.id ? 'not-allowed' : 'pointer',
+                                    fontWeight: 600,
+                                    opacity: disposingId === itemToDispose.id ? 0.6 : 1,
+                                    boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)',
+                                    transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={(e) => { if (disposingId !== itemToDispose.id) e.currentTarget.style.background = '#dc2626'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = '#ef4444'; }}
+                            >
+                                {disposingId === itemToDispose.id ? 'Disposing...' : 'Yes, Dispose & Remove'}
+                            </button>
                         </div>
                     </div>
                 </div>
